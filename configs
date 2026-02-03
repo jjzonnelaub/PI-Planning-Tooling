@@ -173,10 +173,30 @@ function isExcludedTeam(teamName, excludedTeams) {
   );
 }
 // ===== JIRA CONFIGURATION =====
+// Credentials stored in Script Properties (Project Settings > Script Properties)
+function getJiraConfig() {
+  const props = PropertiesService.getScriptProperties();
+  return {
+    baseUrl: props.getProperty('JIRA_BASE_URL') || '',
+    email: props.getProperty('JIRA_EMAIL') || '',
+    apiToken: props.getProperty('JIRA_API_TOKEN') || ''
+  };
+}
+
+// For backwards compatibility - lazy-loaded config
+let _jiraConfig = null;
+function get_JIRA_CONFIG() {
+  if (!_jiraConfig) {
+    _jiraConfig = getJiraConfig();
+  }
+  return _jiraConfig;
+}
+
+// Define as getter for existing code compatibility
 const JIRA_CONFIG = {
-  baseUrl: 'https://modmedrnd.atlassian.net',
-  email: 'Jaime.laub@modmed.com',
-  apiToken: 'ATATT3xFfGF0lTO98zKWaMIDimOaPfzk955wRHpY9CvBpPYvpFq4vLL0HxFAF6ohfm8uSLRwpVDlyy0unJm2UHw0jt5IGVvqKUNoSbUJob9wi7FgtQU84OALkinBGptHvjQV7blbhIxxS0nJFZGtguSg_KFc9FpLb7S8i_hiH_Sp42EXOdLg4cc=D95F1907'
+  get baseUrl() { return get_JIRA_CONFIG().baseUrl; },
+  get email() { return get_JIRA_CONFIG().email; },
+  get apiToken() { return get_JIRA_CONFIG().apiToken; }
 };
 
 // ===== FIELD MAPPINGS =====
