@@ -1,0 +1,520 @@
+// ===== VALUE STREAM CONFIGURATION =====
+const VALUE_STREAM_CONFIG = {
+  'EMA Clinical': {
+    // No filters - searches all projects for this value stream
+    filter: null,
+    scrumTeams: [] // Add teams as discovered
+  },
+  'EMA RAC': {
+    // No filters - searches all projects for this value stream
+    filter: null,
+    scrumTeams: [] // Add teams as discovered
+  },
+  'RCM Genie': {
+    // No filters - searches all projects for this value stream
+    filter: null,
+    scrumTeams: [] // Add teams as discovered
+  },
+  'MMPM': {
+    // No filters - searches all projects for this value stream
+    filter: null,
+    scrumTeams: [
+      'Billionaires',
+      'ClaimCraft',
+      'Kaizen',
+      'Lynx',
+      'Penny-Wise',
+      'Time-Keepers',
+      'Trailblazers'
+    ]
+  },
+  'AIMM': {
+    // Special configuration: searches for specific value streams with scrum team filter
+    // Still searches across all projects
+    filter: {
+      scrumTeam: 'Artificially Intelligent',
+      valueStreams: ['EMA Clinical', 'EMA RAC', 'MMPM']  // Must be one of these
+    },
+    scrumTeams: ['Artificially Intelligent']
+  }
+};
+/**
+ * DYNAMIC TEAM EXCLUSION CONFIGURATION
+ * Add this to your Config file after VALUE_STREAM_CONFIG
+ * 
+ * This replaces the hardcoded EXCLUDED_TEAMS approach with a dynamic,
+ * context-aware system based on dependency value streams
+ */
+
+// ===== DYNAMIC TEAM EXCLUSION FUNCTIONS =====
+
+/**
+ * Determines which teams should be excluded from capacity calculations
+ * based on their dependencies and the current value stream context
+ * 
+ * Logic: Exclude teams that:
+ *  1. Have ONLY dependency issues (no regular work), AND
+ *  2. All their dependencies are from OTHER value streams
+ * 
+ * @param {Array} issues - All issues for the PI
+ * @param {string} currentValueStream - The value stream being analyzed (e.g., "MMPM", "RCM Genie")
+ * @return {Array} Array of team names that should be excluded
+ */
+function getExcludedTeamsForContext(issues, currentValueStream) {
+  if (!issues || !currentValueStream) {
+    console.log('No issues or value stream provided for exclusion check');
+    return [];
+  }
+  
+  // Normalize the current value stream name for comparison
+  const normalizedCurrent = normalizeValueStreamName(currentValueStream);
+  
+  console.log(`\n=== Determining Excluded Teams for Context: ${normalizedCurrent} ===`);
+  
+  // Categorize issues by team
+  const teamIssues = {};
+  issues.forEach(issue => {
+    const team = issue.scrumTeam;
+    if (!team) return;
+    
+    if (!teamIssues[team]) {
+      teamIssues[team] = {
+        dependencies: [],
+        regularWork: []
+      };
+    }
+    
+    if (issue.issueType === 'Dependency') {
+      teamIssues[team].dependencies.push(issue);
+    } else {
+      teamIssues[team].regularWork.push(issue);
+    }
+  });
+  
+  // Determine which teams to exclude
+  const excludedTeams = [];
+  
+  Object.keys(teamIssues).forEach(team => {
+    const teamData = teamIssues[team];
+    
+    // Check if team has any regular work (non-dependency issues)
+    const hasRegularWork = teamData.regularWork.length > 0;
+    
+    // Check dependencies' value streams
+    const crossStreamDependencies = teamData.dependencies.filter(dep => {
+      const depValueStream = normalizeValueStreamName(dep.dependsOnValuestream || dep.valueStream);
+      const isCrossStream = depValueStream && depValueStream !== normalizedCurrent;
+      
+      if (isCrossStream) {
+        console.log(`  Team "${team}" has cross-VS dependency: ${dep.key} from ${dep.dependsOnValuestream || dep.valueStream}`);
+      }
+      
+      return isCrossStream;
+    });
+    
+    // Exclusion criteria:
+    // 1. Team has NO regular work (only dependencies), AND
+    // 2. All dependencies are from other value streams
+    const shouldExclude = !hasRegularWork && 
+                         teamData.dependencies.length > 0 && 
+                         crossStreamDependencies.length === teamData.dependencies.length;
+    
+    if (shouldExclude) {
+      const depValueStreams = [...new Set(crossStreamDependencies.map(d => d.dependsOnValuestream || d.valueStream))];
+      console.log(`  ❌ EXCLUDING team "${team}"`);
+      console.log(`     Reason: Only has ${teamData.dependencies.length} dependency(ies) from: ${depValueStreams.join(', ')}`);
+      console.log(`     No regular work in ${normalizedCurrent}`);
+      excludedTeams.push(team);
+    } else if (hasRegularWork) {
+      console.log(`  ✅ INCLUDING team "${team}": Has ${teamData.regularWork.length} regular work items in ${normalizedCurrent}`);
+    }
+  });
+  
+  console.log(`\nExcluded ${excludedTeams.length} team(s) from ${normalizedCurrent}:`, excludedTeams);
+  console.log('=== End Exclusion Analysis ===\n');
+  
+  return excludedTeams;
+}
+
+/**
+ * Normalize value stream names for comparison
+ * Handles variations like "MMPM", "mmpm", "RCM Genie", "RCM-Genie", "rcm_genie", etc.
+ * 
+ * @param {string} name - The value stream name to normalize
+ * @return {string} Normalized name (uppercase, standardized spaces)
+ */
+function normalizeValueStreamName(name) {
+  if (!name) return '';
+  
+  return name
+    .toString()
+    .toUpperCase()
+    .trim()
+    .replace(/[-_\s]+/g, ' ')  // Normalize separators (-, _, multiple spaces) to single space
+    .replace(/\s+/g, ' ');      // Collapse multiple spaces to single space
+}
+
+/**
+ * Check if a team should be excluded in the current context
+ * 
+ * @param {string} teamName - The team to check
+ * @param {Array} excludedTeams - List of teams to exclude (from getExcludedTeamsForContext)
+ * @return {boolean} True if the team should be excluded
+ */
+function isExcludedTeam(teamName, excludedTeams) {
+  if (!teamName || !excludedTeams || excludedTeams.length === 0) {
+    return false;
+  }
+  
+  const normalizedTeam = teamName.toString().toUpperCase().trim();
+  
+  return excludedTeams.some(excludedTeam => 
+    excludedTeam.toString().toUpperCase().trim() === normalizedTeam
+  );
+}
+// ===== JIRA CONFIGURATION =====
+const JIRA_CONFIG = {
+  baseUrl: 'https://modmedrnd.atlassian.net',
+  email: 'Jaime.laub@modmed.com',
+  apiToken: 'ATATT3xFfGF0lTO98zKWaMIDimOaPfzk955wRHpY9CvBpPYvpFq4vLL0HxFAF6ohfm8uSLRwpVDlyy0unJm2UHw0jt5IGVvqKUNoSbUJob9wi7FgtQU84OALkinBGptHvjQV7blbhIxxS0nJFZGtguSg_KFc9FpLb7S8i_hiH_Sp42EXOdLg4cc=D95F1907'
+};
+
+// ===== FIELD MAPPINGS =====
+const FIELD_MAPPINGS = {
+  summary: 'summary',
+  status: 'status',
+  storyPoints: 'customfield_10037',
+  storyPointEstimate: 'customfield_10016',
+  epicLink: 'customfield_10014',
+  programIncrement: 'customfield_10113',
+  valueStream: 'customfield_10046',
+  orgField: 'customfield_11192',
+  piCommitment: 'customfield_10063',
+  scrumTeam: 'customfield_10040',
+  piTargetIteration: 'customfield_10061',
+  iterationStart: 'customfield_10069',
+  iterationEnd: 'customfield_10070',
+  allocation: 'customfield_10043',
+  portfolioInitiative: 'customfield_10049',
+  programInitiative: 'customfield_10050',
+  featurePoints: 'customfield_10252',
+  rag: 'customfield_10068',
+  ragNote: 'customfield_10067',
+  dependsOnValuestream: 'customfield_10114',
+  dependsOnTeam: 'customfield_10120',
+  costOfDelay: 'customfield_10065',
+  labels: 'labels',
+  sprint: 'customfield_10020', 
+  fixVersions: 'fixVersions'
+};
+
+// ===== CACHE CONFIGURATION =====
+const CACHE_EXPIRATION_MINUTES = 60;
+
+// ===== ALLOCATION CATEGORIES =====
+// Standard allocation categories used throughout the system
+const ALLOCATION_CATEGORIES = {
+  FEATURES: 'Features (Product - Compliance & Feature)',
+  TECH: 'Tech / Platform',
+  KLO: 'Planned KLO',
+  QUALITY: 'Planned Quality'
+};
+
+// ===== COLOR CONFIGURATION =====
+// Colors used for various UI elements
+const COLORS = {
+  HEADER_PRIMARY: '#9b7bb8',
+  HEADER_SECONDARY: '#4285f4',
+  BACKGROUND_LIGHT: '#e8f0fe',
+  BACKGROUND_WARNING: '#fff3cd',
+  BACKGROUND_ERROR: '#ffe6e6',
+  BACKGROUND_SUCCESS: '#ccffcc',
+  BACKGROUND_DANGER: '#ffcccc',
+  PLANNING_HEADER: '#E1D5E7',
+  ALLOCATION_FEATURES: '#c9daf8',
+  ALLOCATION_TECH: '#d9ead3',
+  ALLOCATION_KLO: '#fce5cd',
+  ALLOCATION_QUALITY: '#f4cccc'
+};
+
+// ===== UI CONFIGURATION =====
+const UI_CONFIG = {
+  DEFAULT_FONT: 'Comfortaa',
+  HEADER_FONT_SIZE: 16,
+  SUBHEADER_FONT_SIZE: 14,
+  BODY_FONT_SIZE: 8,
+  COLUMN_WIDTHS: {
+    KEY: 120,
+    SUMMARY: 300,
+    STANDARD: 100
+  }
+};
+
+// ===== SHEET NAMES CONFIGURATION =====
+const SHEET_NAMES = {
+  CAPACITY: 'Capacity',
+  PI_PREFIX: 'PI ',
+  SUMMARY_SUFFIX: ' Summary',
+  DASHBOARD_SUFFIX: ' Dashboard'
+};
+
+// ===== JQL TEMPLATES =====
+const JQL_TEMPLATES = {
+  EPIC_BY_PI: 'issuetype = Epic AND cf[10113] = "${programIncrement}"',
+  EPIC_BY_VALUE_STREAM: 'issuetype = Epic AND cf[10046] = "${valueStream}" AND cf[10113] = "${programIncrement}"',
+  CHILDREN_BY_EPIC: 'cf[10014] = ${epicKey}',
+  CHILDREN_BY_EPICS: 'cf[10014] in (${epicKeys})'
+};
+
+// ===== HELPER FUNCTIONS =====
+/**
+ * Builds JQL query for fetching epics - searches across ALL projects
+ * @param {string} displayValueStream - The value stream to search for
+ * @param {string} programIncrement - The PI to filter by (e.g., "PI 11")
+ * @return {string} The JQL query
+ */
+function buildEpicJQL(displayValueStream, programIncrement) {
+  const config = VALUE_STREAM_CONFIG[displayValueStream];
+  
+  // Base query - no project restriction, searches across all projects
+  let jql = `issuetype = Epic AND cf[10113] = "${programIncrement}" AND status != "Closed"`;
+  
+  if (displayValueStream === 'AIMM') {
+    // Special handling for AIMM - must match specific value streams AND scrum team
+    const validValueStreams = config.filter.valueStreams || ['EMA Clinical', 'EMA RAC', 'MMPM'];
+    jql += ` AND cf[10046] in ("${validValueStreams.join('","')}")`;
+    jql += ` AND cf[10040] = "${config.filter.scrumTeam}"`;
+  } else {
+    // For other value streams, just filter by the value stream name
+    jql += ` AND cf[10046] = "${displayValueStream}"`;
+  }
+  
+  console.log(`JQL for ${displayValueStream}: ${jql}`);
+  return jql;
+}
+/**
+ * Gets all available value streams
+ * @return {Array<string>} Array of value stream names
+ */
+function getAvailableValueStreams() {
+  return ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'RCM Genie'].sort();
+}
+
+/**
+ * Maps allocation to category using the helper function
+ * This is for backward compatibility
+ */
+function mapAllocationToCategory(allocation) {
+  return getAllocationCategory(allocation);
+}
+
+/**
+ * Gets allocation category
+ */
+function getAllocationCategory(allocation) {
+  if (!allocation) return ALLOCATION_CATEGORIES.FEATURES;
+  
+  const allocationLower = allocation.toString().toLowerCase().trim();
+  
+  // Define mapping rules
+  const mappingRules = {
+    [ALLOCATION_CATEGORIES.FEATURES]: [
+      'feature', 'product', 'compliance', 'capability', 'enhancement',
+      'story', 'user story', 'requirement', 'func', 'new feature'
+    ],
+    [ALLOCATION_CATEGORIES.TECH]: [
+      'tech', 'platform', 'infrastructure', 'architecture', 'technical',
+      'system', 'framework', 'devops', 'tooling', 'engineering'
+    ],
+    [ALLOCATION_CATEGORIES.KLO]: [
+      'klo', 'keep', 'lights', 'maintenance', 'support', 'operational',
+      'ops', 'sustaining', 'keep lights on', 'bau', 'business as usual'
+    ],
+    [ALLOCATION_CATEGORIES.QUALITY]: [
+      'quality', 'defect', 'bug', 'fix', 'issue', 'problem',
+      'qa', 'test', 'testing', 'quality assurance', 'defect fix'
+    ]
+  };
+  
+  // Check each category's rules
+  for (const [category, keywords] of Object.entries(mappingRules)) {
+    for (const keyword of keywords) {
+      if (allocationLower.includes(keyword)) {
+        return category;
+      }
+    }
+  }
+  
+  // Default to Features if no match
+  return ALLOCATION_CATEGORIES.FEATURES;
+}
+
+/**
+ * Gets color for allocation type
+ */
+function getAllocationColor(allocationType) {
+  const colorMap = {
+    [ALLOCATION_CATEGORIES.FEATURES]: COLORS.ALLOCATION_FEATURES,
+    [ALLOCATION_CATEGORIES.TECH]: COLORS.ALLOCATION_TECH,
+    [ALLOCATION_CATEGORIES.KLO]: COLORS.ALLOCATION_KLO,
+    [ALLOCATION_CATEGORIES.QUALITY]: COLORS.ALLOCATION_QUALITY
+  };
+  
+  return colorMap[allocationType] || '#ffffff';
+}
+function getTeamsForValueStream(valueStream) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const registrySheet = spreadsheet.getSheetByName('Team Registry');
+  
+  // Fallback to config if sheet doesn't exist
+  if (!registrySheet) {
+    console.log('⚠️ Team Registry sheet not found, using hardcoded config');
+    return getTeamsFromConfig(valueStream);
+  }
+  
+  console.log(`Reading teams for ${valueStream} from Team Registry...`);
+  
+  // Read all data from sheet
+  const data = registrySheet.getDataRange().getValues();
+  
+  if (data.length < 2) {
+    console.warn('Team Registry sheet has no data');
+    return [];
+  }
+  
+  const headers = data[0];
+  const vsCol = headers.indexOf('Value Stream');
+  const teamCol = headers.indexOf('Scrum Team');
+  const activeCol = headers.indexOf('Active');
+  
+  if (vsCol === -1 || teamCol === -1 || activeCol === -1) {
+    console.error('Team Registry sheet missing required columns');
+    return getTeamsFromConfig(valueStream);
+  }
+  
+  const teams = [];
+  
+  // Process each row (skip header row)
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const rowVS = row[vsCol];
+    const team = row[teamCol];
+    const active = row[activeCol];
+    
+    // Skip placeholder rows
+    if (team && team.toString().includes('[Add Team Name]')) {
+      continue;
+    }
+    
+    // Match value stream and only include active teams
+    if (rowVS === valueStream && active === true && team) {
+      teams.push(team.toString().trim());
+    }
+  }
+  
+  console.log(`✅ Found ${teams.length} active teams for ${valueStream}:`, teams.join(', '));
+  return teams;
+}
+
+/**
+ * Get teams from hardcoded config (fallback)
+ * @param {string} valueStream - The value stream name
+ * @return {Array<string>} Array of team names
+ */
+function getTeamsFromConfig(valueStream) {
+  // This function reads from the existing VALUE_STREAM_CONFIG
+  if (typeof VALUE_STREAM_CONFIG !== 'undefined' && VALUE_STREAM_CONFIG[valueStream]) {
+    const config = VALUE_STREAM_CONFIG[valueStream];
+    return config.scrumTeams || [];
+  }
+  
+  // Last resort: hardcoded fallback
+  const fallbackTeams = {
+    'EMA Clinical': [
+      'Ordernauts', 'Embryonics', 'Alchemist', 'Vesties',
+      'Spice Runners', 'Mandalore', 'Patience', 'Avengers',
+      'Explorers', 'Artificially Intelligent', 'Pain Killers', 'Eyefinity'
+    ],
+    'MMPM': [
+      'Billionaires', 'ClaimCraft', 'Kaizen', 'Lynx',
+      'Penny-Wise', 'Time-Keepers', 'Trailblazers'
+    ],
+    'AIMM': ['Artificially Intelligent'],
+    'EMA RAC': [],
+    'RCM Genie': []
+  };
+  
+  return fallbackTeams[valueStream] || [];
+}
+function getAllValueStreamsFromRegistry() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const registrySheet = spreadsheet.getSheetByName('Team Registry');
+  
+  if (!registrySheet) {
+    return ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'RCM Genie'];
+  }
+  
+  const data = registrySheet.getDataRange().getValues();
+  const headers = data[0];
+  const vsCol = headers.indexOf('Value Stream');
+  const activeCol = headers.indexOf('Active');
+  
+  const valueStreams = new Set();
+  
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const vs = row[vsCol];
+    const active = row[activeCol];
+    
+    if (vs && active === true) {
+      valueStreams.add(vs.toString().trim());
+    }
+  }
+  
+  return Array.from(valueStreams).sort();
+}
+function validateTeamRegistry(programIncrement, valueStream) {
+  console.log(`\n=== Validating Team Registry for ${valueStream} in ${programIncrement} ===`);
+  
+  const registryTeams = getTeamsForValueStream(valueStream);
+  console.log(`Teams in registry: ${registryTeams.length}`);
+  
+  // Fetch a sample from JIRA to see what teams actually exist
+  const jql = `cf[10113] = "${programIncrement}" AND cf[10046] = "${valueStream}"`;
+  console.log(`Testing with JQL: ${jql}`);
+  
+  try {
+    const issues = searchJiraIssues(jql, 100);
+    
+    // Get unique team names from JIRA response
+    const jiraTeams = new Set();
+    issues.forEach(issue => {
+      if (issue.scrumTeam) {
+        jiraTeams.add(issue.scrumTeam);
+      }
+    });
+    
+    console.log(`Teams found in JIRA: ${jiraTeams.size}`);
+    console.log('JIRA teams:', Array.from(jiraTeams).sort().join(', '));
+    
+    // Compare registry vs JIRA
+    const inRegistryNotJira = registryTeams.filter(t => !jiraTeams.has(t));
+    const inJiraNotRegistry = Array.from(jiraTeams).filter(t => !registryTeams.includes(t));
+    
+    if (inRegistryNotJira.length > 0) {
+      console.warn('⚠️ Teams in registry but NOT in JIRA:', inRegistryNotJira.join(', '));
+    }
+    
+    if (inJiraNotRegistry.length > 0) {
+      console.warn('⚠️ Teams in JIRA but NOT in registry:', inJiraNotRegistry.join(', '));
+      console.warn('   → Add these teams to Team Registry!');
+    }
+    
+    if (inRegistryNotJira.length === 0 && inJiraNotRegistry.length === 0) {
+      console.log('✅ Team Registry matches JIRA perfectly!');
+    }
+    
+  } catch (error) {
+    console.error('Error validating teams:', error);
+  }
+}
