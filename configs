@@ -538,3 +538,68 @@ function validateTeamRegistry(programIncrement, valueStream) {
     console.error('Error validating teams:', error);
   }
 }
+const REPORT_LOG_CONFIG = {
+  sheetName: 'Report Log',
+  headers: [
+    'Generated Date', 'PI', 'Value Stream', 
+    'Report Name', 'Spreadsheet URL', 'Spreadsheet ID', 
+    'Epic Count', 'Status'
+  ]
+};
+
+function getOrCreateReportLogSheet() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  let logSheet = spreadsheet.getSheetByName(REPORT_LOG_CONFIG.sheetName);
+  
+  if (!logSheet) {
+    logSheet = spreadsheet.insertSheet(REPORT_LOG_CONFIG.sheetName);
+    
+    // Setup headers
+    const headers = REPORT_LOG_CONFIG.headers;
+    logSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    logSheet.getRange(1, 1, 1, headers.length)
+      .setFontWeight('bold')
+      .setBackground(COLORS.HEADER_PRIMARY)
+      .setFontColor('#ffffff')
+      .setHorizontalAlignment('center');
+    
+    // Set column widths
+    const widths = [150, 60, 120, 250, 350, 200, 80, 100];
+    widths.forEach((w, i) => logSheet.setColumnWidth(i + 1, w));
+    
+    logSheet.setFrozenRows(1);
+  }
+  
+  return logSheet;
+}
+
+/**
+ * Log a report to the Report Log sheet
+ * @param {Object} reportInfo - Report metadata
+ */
+function logReport(reportInfo) {
+  const logSheet = getOrCreateReportLogSheet();
+  const lastRow = Math.max(logSheet.getLastRow(), 1);
+  
+  const logData = [
+    new Date().toLocaleString(),
+    reportInfo.piNumber ? `PI ${reportInfo.piNumber}` : reportInfo.pi || '',
+    reportInfo.valueStream || '',
+    reportInfo.reportName || '',
+    reportInfo.spreadsheetUrl || '',
+    reportInfo.spreadsheetId || '',
+    reportInfo.epicCount || 0,
+    reportInfo.status || 'Success'
+  ];
+  
+  logSheet.getRange(lastRow + 1, 1, 1, logData.length).setValues([logData]);
+  
+  // Make URL clickable
+  if (reportInfo.spreadsheetUrl) {
+    const urlCell = logSheet.getRange(lastRow + 1, 5);
+    urlCell.setFormula(`=HYPERLINK("${reportInfo.spreadsheetUrl}", "Open Report")`);
+    urlCell.setFontColor('#1155cc');
+  }
+  
+  console.log('📝 Report logged:', reportInfo.reportName);
+}
