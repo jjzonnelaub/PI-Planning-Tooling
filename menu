@@ -3099,3 +3099,27 @@ function runAnalysisWithOptions(piNumber, selectedValueStreams, summaryOption) {
     forceRefresh: false
   });
 }
+function menuValidateJiraConfig() {
+  const config = getJiraConfig();
+  const ui = SpreadsheetApp.getUi();
+  
+  const missing = [];
+  if (!config.baseUrl) missing.push('JIRA_BASE_URL');
+  if (!config.email) missing.push('JIRA_EMAIL');
+  if (!config.apiToken) missing.push('JIRA_API_TOKEN');
+  
+  if (missing.length > 0) {
+    ui.alert('⚠️ Missing Configuration',
+      'The following Script Properties are not set:\n\n' +
+      missing.join('\n') + '\n\n' +
+      'Go to: Project Settings > Script Properties to configure.',
+      ui.ButtonSet.OK);
+  } else {
+    ui.alert('✅ Configuration Valid',
+      'JIRA configuration is properly set up.\n\n' +
+      'Base URL: ' + config.baseUrl + '\n' +
+      'Email: ' + config.email + '\n' +
+      'Token: ****' + config.apiToken.slice(-8),
+      ui.ButtonSet.OK);
+  }
+}
