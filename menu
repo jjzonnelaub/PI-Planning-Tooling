@@ -15,6 +15,8 @@ function onOpen() {
   
   // Analysis and Reporting
   planningMenu.addSubMenu(ui.createMenu('📊 Analysis & Reports')
+      .addItem('🎯 Analyze PI (with Destinations)...', 'menuAnalyzePICustom')
+      .addSeparator()
       .addItem('📈 Full Update (With Summaries)', 'menuAnalyzeWithSummaries')
       .addItem('⚡ Fast Update (Skip Summaries)', 'menuAnalyzeWithoutSummaries')
       .addItem('❓ Update (Ask About Summaries)', 'menuAnalyzeWithSummaryChoice')
@@ -37,6 +39,8 @@ function onOpen() {
   // Utilities submenu
   planningMenu.addSubMenu(ui.createMenu('🔧 Utilities')
     .addItem('Test JIRA Connection', 'menuTestJiraConnection')
+    .addItem('Configure JIRA Credentials', 'showCredentialSetupDialog')
+    .addSeparator()
     .addItem('Refresh All Formulas', 'menuRefreshFormulas')
     .addItem('Clear Cache', 'menuClearCache')
     .addItem('Clean Current Sheet Data', 'cleanCurrentSheetData')
@@ -45,6 +49,9 @@ function onOpen() {
     .addItem('Show All Value Streams', 'menuShowAllValueStreams')
     .addItem('🔍 Diagnostic Check', 'diagnosticCheckDansReportData')
     .addSeparator()
+    .addItem('📋 View Report Log', 'viewReportLog')
+    .addItem('📂 Open Report from Log...', 'openReportFromLog')
+    .addSeparator()
     .addItem('Setup Instructions', 'menuSetup'));
     
   planningMenu.addToUi();
@@ -52,6 +59,9 @@ function onOpen() {
   // Add the filter menu
   const filterMenu = updateFilterMenu();
   filterMenu.addToUi();
+  
+  // Add refresh menu if this is a generated report
+  addRefreshMenuIfNeeded();
 }
 
 function updateFilterMenu() {
@@ -89,280 +99,27 @@ function updateFilterMenu() {
   return filterMenu;
 }
 
-// ===== PRIMARY UPDATE FUNCTION =====
+// =============================================================================
+// PRIMARY MENU ENTRY POINTS - These are now defined in UnifiedAnalysis.gs
+// The functions below (menuPrimaryUpdate, menuAnalyzePICustom, menuAnalyzeWithSummaries,
+// menuAnalyzeWithoutSummaries, menuAnalyzeWithSummaryChoice) all open the unified
+// AnalysisDialog.html which provides:
+//   - PI number selection
+//   - Multi-select value streams (with RCM Genie included)
+//   - Summary options (with/without)
+//   - Report destination (existing/new/update)
+// =============================================================================
 
-/**
- * Primary update function - choose between value stream or scrum team with multi-select
- */
-function menuPrimaryUpdate() {
-  const ui = SpreadsheetApp.getUi();
-  
-  // First, get the PI number
-  const piResponse = ui.prompt(
-    'Update Data - Step 1',
-    'Enter PI number (e.g., 11, 12, 13):',
-    ui.ButtonSet.OK_CANCEL
-  );
-  
-  if (piResponse.getSelectedButton() !== ui.Button.OK) return;
-  
-  const piNumber = piResponse.getResponseText().trim();
-  if (!piNumber || !/^\d+$/.test(piNumber)) {
-    ui.alert('Invalid PI format. Please use a number like "11" or "12"');
-    return;
-  }
-  
-  // Check if PI sheet exists
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const piSheetName = `PI ${piNumber}`;
-  const piSheet = spreadsheet.getSheetByName(piSheetName);
-  
-  if (!piSheet) {
-    const response = ui.alert(
-      'No PI Data Found',
-      `No data found for ${piSheetName}.\n\nWould you like to run a full analysis first?`,
-      ui.ButtonSet.YES_NO
-    );
-    
-    if (response === ui.Button.YES) {
-      menuAnalyzePIWithSelection();
-    }
-    return;
-  }
-  
-  // Get available value streams and scrum teams
-  showProgress('Reading available options...');
-  // FIXED: Explicitly include RCM in the value streams list
-  const valueStreams = ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'RCM Genie'].sort();
-  const scrumTeams = getScrumTeamsFromPISheet(piNumber);
-  closeProgress();
-  
-  // Show selection dialog with multi-select
-  const html = HtmlService.createHtmlOutput(`
-    <style>
-      body { font-family: Arial, sans-serif; padding: 20px; }
-      h3 { margin-top: 0; color: #333; }
-      .info { background: #e8f0fe; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 14px; }
-      .option-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa; }
-      .option-section h4 { margin-top: 0; color: #1a73e8; font-size: 14px; }
-      .checkbox-container { 
-        max-height: 200px; 
-        overflow-y: auto; 
-        border: 1px solid #ddd; 
-        padding: 10px; 
-        margin: 10px 0; 
-        background: white;
-        border-radius: 4px;
-      }
-      .checkbox-item { margin: 5px 0; padding: 3px; }
-      .checkbox-item:hover { background: #f0f0f0; border-radius: 3px; }
-      .checkbox-item label { cursor: pointer; display: block; }
-      .button-container { margin-top: 20px; text-align: right; border-top: 1px solid #ddd; padding-top: 15px; }
-      button { padding: 10px 20px; margin-left: 10px; font-size: 14px; cursor: pointer; border-radius: 4px; font-weight: 500; }
-      .update-btn { background-color: #34a853; color: white; border: none; }
-      .update-btn:hover { background-color: #2d8e47; }
-      .update-btn:disabled { background-color: #ccc; cursor: not-allowed; }
-      .cancel-btn { background-color: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
-      .cancel-btn:hover { background-color: #e8eaed; }
-      .processing { display: none; color: #34a853; margin-top: 10px; text-align: center; font-weight: bold; background: #e8f0fe; padding: 10px; border-radius: 4px; }
-      .selection-info { font-size: 12px; color: #666; margin-top: 5px; font-style: italic; }
-      input[type="radio"] { margin-right: 8px; }
-      .radio-option { margin: 10px 0; padding: 8px; background: white; border-radius: 4px; }
-      .radio-option label { cursor: pointer; font-size: 15px; }
-      .select-all { margin: 5px 0; padding: 5px; font-size: 13px; color: #5f6368; background: #e8f0fe; border-radius: 3px; }
-      .select-all label { cursor: pointer; }
-      .disabled { opacity: 0.5; pointer-events: none; }
-      .warning { background: #fff3cd; padding: 8px; border-radius: 4px; margin-top: 10px; font-size: 12px; color: #856404; display: none; border-left: 3px solid #f4b400; }
-    </style>
-    
-    <h3>🔄 Update PI ${piNumber} Data</h3>
-    <div class="info">
-      <strong>Choose your update method:</strong> Select value streams to update all their teams, or select specific scrum teams to update individually.
-    </div>
-    
-    <div class="option-section">
-      <div class="radio-option">
-        <label>
-          <input type="radio" name="updateType" value="valueStream" checked onchange="toggleOptions()">
-          <strong>📊 Update by Value Streams</strong>
-        </label>
-      </div>
-      <div id="valueStreamContainer">
-        <div class="select-all">
-          <label>
-            <input type="checkbox" id="selectAllVS" onchange="toggleAllVS(this)"> 
-            <strong>Select All Value Streams</strong>
-          </label>
-        </div>
-        <div class="checkbox-container">
-          ${valueStreams.map(vs => `
-            <div class="checkbox-item">
-              <label>
-                <input type="checkbox" class="vs-checkbox" value="${vs}"> 
-                ${vs}
-              </label>
-            </div>
-          `).join('')}
-        </div>
-        <div class="selection-info">✓ Updates all teams within the selected value streams</div>
-      </div>
-    </div>
-    
-    <div class="option-section">
-      <div class="radio-option">
-        <label>
-          <input type="radio" name="updateType" value="scrumTeam" onchange="toggleOptions()">
-          <strong>👥 Update by Scrum Teams</strong>
-        </label>
-      </div>
-      <div id="scrumTeamContainer" class="disabled">
-        <div class="select-all">
-          <label>
-            <input type="checkbox" id="selectAllTeams" onchange="toggleAllTeams(this)"> 
-            <strong>Select All Teams</strong>
-          </label>
-        </div>
-        <div class="checkbox-container">
-          ${scrumTeams.map(team => `
-            <div class="checkbox-item">
-              <label>
-                <input type="checkbox" class="team-checkbox" value="${team.name}"> 
-                ${team.name} <span style="color: #666; font-size: 11px;">(${team.epicCount} epics, ${team.storyCount} stories)</span>${team.name === 'Unassigned' ? ' <em style="color: #d93025;">- No JIRA update</em>' : ''}
-              </label>
-            </div>
-          `).join('')}
-        </div>
-        <div class="selection-info">✓ Updates only the selected scrum teams</div>
-      </div>
-    </div>
-    
-    <div class="processing" id="processing">⏳ Processing updates... This may take several minutes.</div>
-    <div class="warning" id="warningMessage"></div>
-    <div class="button-container">
-      <button class="cancel-btn" onclick="google.script.host.close()">Cancel</button>
-      <button class="update-btn" id="updateBtn" onclick="performUpdate()">🚀 Update Selected</button>
-    </div>
-    
-    <script>
-      function toggleOptions() {
-        const updateType = document.querySelector('input[name="updateType"]:checked').value;
-        
-        if (updateType === 'valueStream') {
-          document.getElementById('valueStreamContainer').classList.remove('disabled');
-          document.getElementById('scrumTeamContainer').classList.add('disabled');
-          // Uncheck all team checkboxes
-          document.querySelectorAll('.team-checkbox').forEach(cb => cb.checked = false);
-          document.getElementById('selectAllTeams').checked = false;
-        } else {
-          document.getElementById('scrumTeamContainer').classList.remove('disabled');
-          document.getElementById('valueStreamContainer').classList.add('disabled');
-          // Uncheck all value stream checkboxes
-          document.querySelectorAll('.vs-checkbox').forEach(cb => cb.checked = false);
-          document.getElementById('selectAllVS').checked = false;
-        }
-        
-        document.getElementById('warningMessage').style.display = 'none';
-      }
-      
-      function toggleAllVS(checkbox) {
-        const checkboxes = document.querySelectorAll('.vs-checkbox');
-        checkboxes.forEach(cb => cb.checked = checkbox.checked);
-      }
-      
-      function toggleAllTeams(checkbox) {
-        const checkboxes = document.querySelectorAll('.team-checkbox');
-        checkboxes.forEach(cb => cb.checked = checkbox.checked);
-      }
-      
-      function performUpdate() {
-        const updateType = document.querySelector('input[name="updateType"]:checked').value;
-        const selected = [];
-        
-        if (updateType === 'valueStream') {
-          document.querySelectorAll('.vs-checkbox:checked').forEach(cb => {
-            selected.push(cb.value);
-          });
-          
-          if (selected.length === 0) {
-            alert('⚠️ Please select at least one value stream');
-            return;
-          }
-        } else {
-          document.querySelectorAll('.team-checkbox:checked').forEach(cb => {
-            selected.push(cb.value);
-          });
-          
-          if (selected.length === 0) {
-            alert('⚠️ Please select at least one scrum team');
-            return;
-          }
-        }
-        
-        // Show warning for large selections
-        if (selected.length > 3) {
-          const itemType = updateType === 'valueStream' ? 'value streams' : 'teams';
-          document.getElementById('warningMessage').innerHTML = 
-            '⚠️ <strong>Large Selection:</strong> You selected ' + selected.length + ' ' + itemType + '. This will take several minutes to complete.';
-          document.getElementById('warningMessage').style.display = 'block';
-        }
-        
-        const updateBtn = document.getElementById('updateBtn');
-        updateBtn.disabled = true;
-        updateBtn.textContent = '⏳ Processing...';
-        document.getElementById('processing').style.display = 'block';
-        
-        google.script.run
-          .withSuccessHandler(() => {
-            google.script.host.close();
-          })
-          .withFailureHandler(err => {
-            alert('❌ Error: ' + err);
-            updateBtn.disabled = false;
-            updateBtn.textContent = '🚀 Update Selected';
-            document.getElementById('processing').style.display = 'none';
-            document.getElementById('warningMessage').style.display = 'none';
-          })
-          .performPrimaryUpdate('${piNumber}', updateType, selected);
-      }
-    </script>
-  `)
-  .setWidth(580)
-  .setHeight(720);
-  
-  ui.showModalDialog(html, '🔄 Update Value Stream OR Scrum Team');
-}
-
-/**
- * Perform the primary update based on selection
- */
-function performPrimaryUpdate(piNumber, updateType, selected) {
-  const ui = SpreadsheetApp.getUi();
-  
-  // NEW: Prompt user about summaries
-  const summaryResponse = ui.alert(
-    'Summary Updates',
-    'Do you want to regenerate summary sheets?\n\n' +
-    'YES = Full update with summaries (recommended, slower)\n' +
-    'NO = Data only, skip summaries (faster)',
-    ui.ButtonSet.YES_NO
-  );
-  
-  const updateSummaries = (summaryResponse === ui.Button.YES);
-  
-  if (updateType === 'valueStream') {
-    analyzeSelectedValueStreams(piNumber, selected, {
-      updateSummaries: updateSummaries,
-      forceRefresh: null
-    });
-  } else {
-    // Team updates remain the same
-    if (selected.length === 1) {
-      updateScrumTeamDataWithSummary(piNumber, selected[0]);
-    } else {
-      UpdateScrumTeamsWithSummaries(piNumber, selected);
-    }
-  }
-}
+// NOTE: The following functions are defined in UnifiedAnalysis.gs:
+// - menuPrimaryUpdate()
+// - menuAnalyzePICustom()
+// - menuAnalyzeWithSummaries()
+// - menuAnalyzeWithoutSummaries()
+// - menuAnalyzeWithSummaryChoice()
+// - runUnifiedAnalysis(params)
+// - addRefreshMenuIfNeeded()
+// - refreshReportData()
+// - showRefreshConfig()
 
 /**
  * Batch update multiple teams
@@ -750,14 +507,14 @@ function menuShowAllValueStreams() {
     const config = VALUE_STREAM_CONFIG[vs];
     message += `${vs}\n`;
     
-    if (config.filter) {
+    if (config && config.filter) {
       if (vs === 'AIMM') {
         message += `  - Searches for: ${config.filter.valueStreams.join(', ')}\n`;
         message += `  - With Scrum Team: ${config.filter.scrumTeam}\n`;
       }
     }
     
-    if (config.scrumTeams && config.scrumTeams.length > 0) {
+    if (config && config.scrumTeams && config.scrumTeams.length > 0) {
       message += `  - Known teams: ${config.scrumTeams.length}\n`;
     }
     
@@ -799,279 +556,15 @@ function menuShowPIPlanningDashboard() {
   }
 }
 
-// ===== KEEP ALL EXISTING MENU FUNCTIONS =====
+// ===== LEGACY MENU FUNCTIONS (for backward compatibility) =====
 
+/**
+ * Legacy function - now redirects to unified dialog
+ * This maintains backward compatibility if called directly
+ */
 function menuAnalyzePIWithSelection() {
-  const ui = SpreadsheetApp.getUi();
-  
-  // Explicitly define value streams including RCM
-  const availableValueStreams = ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'RCM Genie'].sort();
-  
-  // ⭐ SINGLE POPUP with BOTH PI input AND Value Stream selection
-  const html = HtmlService.createHtmlOutput(`
-    <style>
-      body { font-family: Arial, sans-serif; padding: 20px; }
-      h3 { margin-top: 0; color: #333; }
-      
-      /* PI Input Section */
-      .pi-section { 
-        margin-bottom: 20px; 
-        padding: 15px; 
-        background: #f8f9fa; 
-        border-radius: 4px; 
-        border: 2px solid #4285f4;
-      }
-      .pi-section label { 
-        display: block; 
-        margin-bottom: 5px; 
-        font-weight: bold; 
-        color: #1a73e8;
-      }
-      .pi-section input { 
-        width: 100%; 
-        padding: 10px; 
-        font-size: 16px; 
-        border: 1px solid #ddd; 
-        border-radius: 4px; 
-        box-sizing: border-box;
-      }
-      .pi-section input:focus {
-        outline: none;
-        border-color: #4285f4;
-        box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
-      }
-      .pi-error { 
-        color: #d93025; 
-        font-size: 12px; 
-        margin-top: 5px; 
-        display: none;
-        font-weight: bold;
-      }
-      
-      /* Value Stream Section */
-      .vs-section { margin-top: 20px; }
-      .vs-section h4 { 
-        margin-bottom: 10px; 
-        color: #1a73e8;
-        font-size: 15px;
-      }
-      .select-all { 
-        margin: 10px 0; 
-        font-size: 14px; 
-        padding: 8px; 
-        background: #e8f0fe; 
-        border-radius: 4px; 
-      }
-      .select-all label {
-        font-weight: bold;
-        cursor: pointer;
-      }
-      .checkbox-container { 
-        max-height: 250px; 
-        overflow-y: auto; 
-        border: 1px solid #ddd; 
-        padding: 10px; 
-        margin: 10px 0; 
-        border-radius: 4px;
-        background: white;
-      }
-      .checkbox-item { 
-        margin: 8px 0; 
-        padding: 5px;
-      }
-      .checkbox-item:hover {
-        background: #f8f9fa;
-        border-radius: 3px;
-      }
-      .checkbox-item label {
-        cursor: pointer;
-        display: block;
-      }
-      
-      /* Note Section */
-      .note { 
-        font-size: 12px; 
-        color: #666; 
-        margin-top: 15px; 
-        padding: 12px; 
-        background: #fff3cd; 
-        border-radius: 4px;
-        border-left: 4px solid #f4b400;
-      }
-      .note strong {
-        color: #856404;
-      }
-      
-      /* Buttons */
-      .button-container { 
-        margin-top: 20px; 
-        text-align: right; 
-        border-top: 1px solid #ddd; 
-        padding-top: 15px; 
-      }
-      button { 
-        padding: 10px 20px; 
-        margin-left: 10px; 
-        font-size: 14px; 
-        cursor: pointer; 
-        border: none; 
-        border-radius: 4px;
-        font-weight: 500;
-      }
-      .analyze-btn { 
-        background-color: #4285f4; 
-        color: white; 
-      }
-      .analyze-btn:hover { 
-        background-color: #357ae8; 
-      }
-      .analyze-btn:disabled { 
-        background-color: #ccc; 
-        cursor: not-allowed; 
-      }
-      .cancel-btn { 
-        background-color: #f1f3f4; 
-        color: #5f6368; 
-        border: 1px solid #dadce0; 
-      }
-      .cancel-btn:hover { 
-        background-color: #e8eaed; 
-      }
-      
-      /* Processing indicator */
-      .processing { 
-        display: none; 
-        color: #4285f4; 
-        margin-top: 10px; 
-        text-align: center; 
-        font-weight: bold;
-        padding: 10px;
-        background: #e8f0fe;
-        border-radius: 4px;
-      }
-    </style>
-    
-    <h3>🎯 Analyze PI Data</h3>
-    
-    <!-- PI Number Input Section -->
-    <div class="pi-section">
-      <label for="piNumber">📋 PI Number:</label>
-      <input 
-        type="text" 
-        id="piNumber" 
-        placeholder="Enter PI number (e.g., 11, 12, 13)" 
-        autofocus
-      >
-      <div class="pi-error" id="piError">⚠️ Please enter a valid PI number (digits only)</div>
-    </div>
-    
-    <!-- Value Stream Selection Section -->
-    <div class="vs-section">
-      <h4>📊 Select Value Streams to Analyze:</h4>
-      <div class="select-all">
-        <label>
-          <input type="checkbox" id="selectAll" onchange="toggleAll(this)"> 
-          <strong>Select All Value Streams</strong>
-        </label>
-      </div>
-      <div class="checkbox-container">
-        ${availableValueStreams.map((vs, index) => `
-          <div class="checkbox-item">
-            <label>
-              <input type="checkbox" class="vs-checkbox" value="${vs}"> 
-              ${vs}
-            </label>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-    
-    <div class="note">
-      <strong>📌 Important Notes:</strong><br>
-      • Analysis searches across <strong>ALL projects</strong> in JIRA<br>
-      • <strong>AIMM</strong>: Pulls epics where Value Stream is (EMA Clinical, EMA RAC, MMPM) AND Scrum Team = "Artificially Intelligent"<br>
-      • <strong>RCM</strong>: Pulls epics where Value Stream = "RCM Genie"<br>
-      • Other value streams filter by their exact name in JIRA
-    </div>
-    
-    <div class="processing" id="processing">
-      ⏳ Processing PI analysis... This may take several minutes.
-    </div>
-    
-    <div class="button-container">
-      <button class="cancel-btn" onclick="google.script.host.close()">Cancel</button>
-      <button class="analyze-btn" id="analyzeBtn" onclick="analyzeSelected()">🚀 Analyze PI</button>
-    </div>
-    
-    <script>
-      // Auto-focus on PI input when popup opens
-      document.getElementById('piNumber').focus();
-      
-      // Allow Enter key in PI input to trigger analysis
-      document.getElementById('piNumber').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          analyzeSelected();
-        }
-      });
-      
-      // Toggle all checkboxes
-      function toggleAll(checkbox) {
-        const checkboxes = document.querySelectorAll('.vs-checkbox');
-        checkboxes.forEach(cb => cb.checked = checkbox.checked);
-      }
-      
-      // Main analysis function
-      function analyzeSelected() {
-        // Step 1: Validate PI number
-        const piNumber = document.getElementById('piNumber').value.trim();
-        const piError = document.getElementById('piError');
-        
-        if (!piNumber || !/^\\d+$/.test(piNumber)) {
-          piError.style.display = 'block';
-          document.getElementById('piNumber').focus();
-          document.getElementById('piNumber').style.borderColor = '#d93025';
-          return;
-        }
-        piError.style.display = 'none';
-        document.getElementById('piNumber').style.borderColor = '#4285f4';
-        
-        // Step 2: Get selected value streams
-        const selected = [];
-        document.querySelectorAll('.vs-checkbox:checked').forEach(cb => {
-          selected.push(cb.value);
-        });
-        
-        if (selected.length === 0) {
-          alert('⚠️ Please select at least one value stream to analyze');
-          return;
-        }
-        
-        // Step 3: Disable button and show processing
-        const analyzeBtn = document.getElementById('analyzeBtn');
-        analyzeBtn.disabled = true;
-        analyzeBtn.textContent = '⏳ Processing...';
-        document.getElementById('processing').style.display = 'block';
-        
-        // Step 4: Call the backend function
-        google.script.run
-          .withSuccessHandler(() => {
-            google.script.host.close();
-          })
-          .withFailureHandler(err => {
-            alert('❌ Error: ' + err);
-            analyzeBtn.disabled = false;
-            analyzeBtn.textContent = '🚀 Analyze PI';
-            document.getElementById('processing').style.display = 'none';
-          })
-          .startAnalysisWrapper(piNumber, selected);
-      }
-    </script>
-  `)
-  .setWidth(520)
-  .setHeight(680);
-  
-  ui.showModalDialog(html, '🎯 Analyze PI with Value Streams');
+  // Use the unified dialog instead
+  menuAnalyzePICustom();
 }
 
 function menuGenerateSummaryCustom() {
@@ -2437,9 +1930,6 @@ function getScrumTeamsFromPISheet(piNumber) {
 /**
  * Update data for a specific scrum team WITH automatic summary generation
  */
-/**
- * Update data for a specific scrum team WITH automatic summary generation
- */
 function updateScrumTeamDataWithSummary(piNumber, scrumTeamName) {
   const ui = SpreadsheetApp.getUi();
   const programIncrement = `PI ${piNumber}`;
@@ -2942,21 +2432,77 @@ function cleanCurrentSheetData() {
     }
   }
 }
-function menuAnalyzeWithSummaries() {
-  showValueStreamSelectionDialog('with');
+
+// =============================================================================
+// HELPER FUNCTIONS FOR REPORT DESTINATIONS
+// =============================================================================
+
+/**
+ * Copy a sheet by name from source to target if it exists.
+ * Skips if target already has a sheet with the same name.
+ * @param {Spreadsheet} source - Source spreadsheet
+ * @param {Spreadsheet} target - Target spreadsheet
+ * @param {string} sheetName - Name of the sheet to copy
+ * @private
+ */
+function copySheetIfExists_(source, target, sheetName) {
+  var sheet = source.getSheetByName(sheetName);
+  if (sheet) {
+    try {
+      // Check if target already has this sheet
+      var existing = target.getSheetByName(sheetName);
+      if (existing) {
+        console.log('"' + sheetName + '" already exists in target, skipping copy');
+        return;
+      }
+      sheet.copyTo(target).setName(sheetName);
+      console.log('Copied "' + sheetName + '" to target spreadsheet');
+    } catch (e) {
+      console.warn('Could not copy "' + sheetName + '":', e);
+    }
+  }
 }
-function menuAnalyzeWithoutSummaries() {
-  showValueStreamSelectionDialog('without');
+
+/**
+ * Count epics in a PI sheet within a spreadsheet.
+ * @param {Spreadsheet} spreadsheet - Target spreadsheet
+ * @param {string} piNumber - PI number
+ * @returns {number} Epic count
+ * @private
+ */
+function countEpicsInSpreadsheet_(spreadsheet, piNumber) {
+  try {
+    var piSheet = spreadsheet.getSheetByName('PI ' + piNumber);
+    if (!piSheet) return 0;
+    
+    var data = piSheet.getDataRange().getValues();
+    if (data.length <= 4) return 0;
+    
+    var headers = data[3];
+    var typeCol = headers.indexOf('Issue Type');
+    if (typeCol === -1) return 0;
+    
+    var count = 0;
+    for (var i = 4; i < data.length; i++) {
+      if (data[i][typeCol] === 'Epic') count++;
+    }
+    return count;
+  } catch (e) {
+    return 0;
+  }
 }
-function menuAnalyzeWithSummaryChoice() {
-  showValueStreamSelectionDialog('ask');
-}
+/**
+ * Shared function to show value stream selection dialog with summary option
+ * Called by menuAnalyzeWithSummaries, menuAnalyzeWithoutSummaries, menuAnalyzeWithSummaryChoice
+ * 
+ * @param {string} summaryOption - 'with', 'without', or 'ask'
+ */
 function showValueStreamSelectionDialog(summaryOption) {
   const ui = SpreadsheetApp.getUi();
   
   // Get PI number first
   const piResponse = ui.prompt(
-    'PI Analysis - Step 1',
+    'PI Analysis',
     'Enter PI number (e.g., 11, 12, 13):',
     ui.ButtonSet.OK_CANCEL
   );
@@ -2969,54 +2515,105 @@ function showValueStreamSelectionDialog(summaryOption) {
     return;
   }
   
-  // Define value streams
-  const valueStreams = ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'RCM Genie'].sort();
+  // Explicitly define value streams including RCM Genie
+  const availableValueStreams = ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'RCM Genie'].sort();
   
   // Show value stream selection dialog
   const html = HtmlService.createHtmlOutput(`
     <style>
       body { font-family: Arial, sans-serif; padding: 20px; }
       h3 { margin-top: 0; color: #333; }
-      .info { background: #e8f0fe; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 14px; }
-      .select-all { margin: 10px 0; padding: 8px; font-size: 13px; color: #5f6368; background: #e8f0fe; border-radius: 3px; }
-      .select-all label { cursor: pointer; }
+      
+      .pi-info { 
+        background: #e8f0fe; 
+        padding: 12px; 
+        border-radius: 4px; 
+        margin-bottom: 15px;
+        border-left: 4px solid #4285f4;
+      }
+      .pi-info strong { color: #1a73e8; }
+      
+      .select-all { 
+        margin: 10px 0; 
+        padding: 8px 12px; 
+        background: #f0f0f0; 
+        border-radius: 4px; 
+      }
+      .select-all label { font-weight: bold; cursor: pointer; }
+      
       .checkbox-container { 
-        max-height: 300px; 
+        max-height: 250px; 
         overflow-y: auto; 
         border: 1px solid #ddd; 
         padding: 10px; 
         margin: 10px 0; 
+        border-radius: 4px;
         background: white;
+      }
+      .checkbox-item { 
+        margin: 8px 0; 
+        padding: 6px 8px;
         border-radius: 4px;
       }
-      .checkbox-item { margin: 8px 0; padding: 5px; }
-      .checkbox-item:hover { background: #f0f0f0; border-radius: 3px; }
-      .checkbox-item label { cursor: pointer; display: block; font-size: 14px; }
-      .button-container { margin-top: 20px; text-align: right; border-top: 1px solid #ddd; padding-top: 15px; }
-      button { padding: 10px 20px; margin-left: 10px; font-size: 14px; cursor: pointer; border-radius: 4px; font-weight: 500; }
-      .analyze-btn { background-color: #34a853; color: white; border: none; }
-      .analyze-btn:hover { background-color: #2d8e47; }
+      .checkbox-item:hover { background: #f5f5f5; }
+      .checkbox-item label { cursor: pointer; display: block; }
+      
+      .note { 
+        font-size: 12px; 
+        color: #666; 
+        margin-top: 15px; 
+        padding: 10px; 
+        background: #fff3cd; 
+        border-radius: 4px;
+        border-left: 3px solid #f4b400;
+      }
+      
+      .button-container { 
+        margin-top: 20px; 
+        text-align: right; 
+        border-top: 1px solid #ddd; 
+        padding-top: 15px; 
+      }
+      button { 
+        padding: 10px 20px; 
+        margin-left: 10px; 
+        font-size: 14px; 
+        cursor: pointer; 
+        border-radius: 4px;
+        font-weight: 500;
+      }
+      .analyze-btn { background-color: #4285f4; color: white; border: none; }
+      .analyze-btn:hover { background-color: #357ae8; }
       .analyze-btn:disabled { background-color: #ccc; cursor: not-allowed; }
       .cancel-btn { background-color: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
-      .cancel-btn:hover { background-color: #e8eaed; }
-      .processing { display: none; color: #34a853; margin-top: 10px; text-align: center; font-weight: bold; }
+      
+      .processing { 
+        display: none; 
+        color: #4285f4; 
+        margin-top: 10px; 
+        text-align: center;
+        font-weight: bold;
+        padding: 10px;
+        background: #e8f0fe;
+        border-radius: 4px;
+      }
     </style>
     
     <h3>📊 Select Value Streams for PI ${piNumber}</h3>
-    <div class="info">
-      <strong>Select one or more value streams to analyze.</strong><br>
-      This will fetch data from JIRA and ${summaryOption === 'with' ? 'update all summaries' : summaryOption === 'ask' ? 'ask about updating summaries' : 'skip summary updates'}.
+    
+    <div class="pi-info">
+      <strong>PI ${piNumber}</strong> - ${summaryOption === 'with' ? 'Full update with summaries' : summaryOption === 'without' ? 'Fast update (skip summaries)' : 'You will be asked about summaries'}
     </div>
     
     <div class="select-all">
       <label>
-        <input type="checkbox" id="selectAllVS" onchange="toggleAllVS(this)"> 
-        <strong>Select All Value Streams</strong>
+        <input type="checkbox" id="selectAll" onchange="toggleAll(this)"> 
+        Select All Value Streams
       </label>
     </div>
     
     <div class="checkbox-container">
-      ${valueStreams.map(vs => `
+      ${availableValueStreams.map(vs => `
         <div class="checkbox-item">
           <label>
             <input type="checkbox" class="vs-checkbox" value="${vs}"> 
@@ -3026,45 +2623,56 @@ function showValueStreamSelectionDialog(summaryOption) {
       `).join('')}
     </div>
     
-    <div class="button-container">
-      <button class="cancel-btn" onclick="google.script.host.close()">Cancel</button>
-      <button class="analyze-btn" id="analyzeBtn" onclick="runAnalysis()">Analyze</button>
+    <div class="note">
+      <strong>📌 Notes:</strong><br>
+      • <strong>AIMM</strong>: Searches across EMA Clinical, EMA RAC, MMPM where Scrum Team = "Artificially Intelligent"<br>
+      • <strong>RCM Genie</strong>: Searches for Value Stream = "RCM Genie"
     </div>
     
     <div class="processing" id="processing">
-      ⏳ Processing... Please wait.
+      ⏳ Running analysis... This may take several minutes.
+    </div>
+    
+    <div class="button-container">
+      <button class="cancel-btn" onclick="google.script.host.close()">Cancel</button>
+      <button class="analyze-btn" id="analyzeBtn" onclick="runAnalysis()">🚀 Run Analysis</button>
     </div>
     
     <script>
-      function toggleAllVS(checkbox) {
+      function toggleAll(checkbox) {
         const checkboxes = document.querySelectorAll('.vs-checkbox');
         checkboxes.forEach(cb => cb.checked = checkbox.checked);
       }
       
       function runAnalysis() {
-        const selected = Array.from(document.querySelectorAll('.vs-checkbox:checked'))
-          .map(cb => cb.value);
+        const selected = [];
+        document.querySelectorAll('.vs-checkbox:checked').forEach(cb => {
+          selected.push(cb.value);
+        });
         
         if (selected.length === 0) {
-          alert('Please select at least one value stream');
+          alert('⚠️ Please select at least one value stream');
           return;
         }
         
         // Disable button and show processing
-        document.getElementById('analyzeBtn').disabled = true;
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        analyzeBtn.disabled = true;
+        analyzeBtn.textContent = '⏳ Processing...';
         document.getElementById('processing').style.display = 'block';
         
-        // Call the server-side function
+        // Call the backend function
         google.script.run
-          .withSuccessHandler(function() {
+          .withSuccessHandler(() => {
             google.script.host.close();
           })
-          .withFailureHandler(function(error) {
-            alert('Error: ' + error.message);
-            document.getElementById('analyzeBtn').disabled = false;
+          .withFailureHandler(err => {
+            alert('❌ Error: ' + err);
+            analyzeBtn.disabled = false;
+            analyzeBtn.textContent = '🚀 Run Analysis';
             document.getElementById('processing').style.display = 'none';
           })
-          .runAnalysisWithOptions(${piNumber}, selected, '${summaryOption}');
+          .runAnalysisWithOptions('${piNumber}', selected, '${summaryOption}');
       }
     </script>
   `)
@@ -3073,53 +2681,40 @@ function showValueStreamSelectionDialog(summaryOption) {
   
   ui.showModalDialog(html, 'Select Value Streams');
 }
+
+/**
+ * Backend function called by showValueStreamSelectionDialog
+ * Runs the analysis with the selected options
+ * 
+ * @param {string} piNumber - PI number
+ * @param {string[]} selectedValueStreams - Array of selected value stream names
+ * @param {string} summaryOption - 'with', 'without', or 'ask'
+ */
 function runAnalysisWithOptions(piNumber, selectedValueStreams, summaryOption) {
   const ui = SpreadsheetApp.getUi();
-  
-  console.log(`Running analysis: PI ${piNumber}, Value Streams: ${selectedValueStreams.join(', ')}, Summary option: ${summaryOption}`);
   
   // Determine if we should update summaries
   let updateSummaries = false;
   
   if (summaryOption === 'with') {
     updateSummaries = true;
+  } else if (summaryOption === 'without') {
+    updateSummaries = false;
   } else if (summaryOption === 'ask') {
+    // Ask the user
     const response = ui.alert(
-      'Update Summaries?',
-      'Do you want to update summary sheets after the analysis?',
+      'Summary Updates',
+      'Do you want to update summary sheets?\n\n' +
+      'YES = Full update with summaries (slower, more complete)\n' +
+      'NO = Data only, skip summaries (faster)',
       ui.ButtonSet.YES_NO
     );
     updateSummaries = (response === ui.Button.YES);
   }
-  // If summaryOption === 'without', updateSummaries stays false
   
   // Call the main analysis function
   analyzeSelectedValueStreams(piNumber, selectedValueStreams, {
     updateSummaries: updateSummaries,
     forceRefresh: false
   });
-}
-function menuValidateJiraConfig() {
-  const config = getJiraConfig();
-  const ui = SpreadsheetApp.getUi();
-  
-  const missing = [];
-  if (!config.baseUrl) missing.push('JIRA_BASE_URL');
-  if (!config.email) missing.push('JIRA_EMAIL');
-  if (!config.apiToken) missing.push('JIRA_API_TOKEN');
-  
-  if (missing.length > 0) {
-    ui.alert('⚠️ Missing Configuration',
-      'The following Script Properties are not set:\n\n' +
-      missing.join('\n') + '\n\n' +
-      'Go to: Project Settings > Script Properties to configure.',
-      ui.ButtonSet.OK);
-  } else {
-    ui.alert('✅ Configuration Valid',
-      'JIRA configuration is properly set up.\n\n' +
-      'Base URL: ' + config.baseUrl + '\n' +
-      'Email: ' + config.email + '\n' +
-      'Token: ****' + config.apiToken.slice(-8),
-      ui.ButtonSet.OK);
-  }
 }
