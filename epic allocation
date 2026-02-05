@@ -529,6 +529,9 @@ function parseJiraIssue(issue) {
     status: getFieldValue(fields.status, 'name'),
     issueType: getFieldValue(fields.issuetype, 'name'),
     parentKey: fields.parent?.key || '',
+    parentName: fields.parent?.fields?.summary || '',
+    parentStatus: fields.parent?.fields?.status?.name || '',
+    parentType: fields.parent?.fields?.issuetype?.name || '',
     valueStream: getFieldValue(fields[FIELD_MAPPINGS.valueStream]),
     analyzedValueStream: '',
     
@@ -694,6 +697,7 @@ function parsePISheetRow(row, headers) {
   return {
     key: getValue('Key'),
     parentKey: getValue('Parent Key'),
+    parentName: getValue('Parent Name'),
     epicLink: getValue('Epic Link'),
     issueType: getValue('Issue Type'),
     summary: getValue('Summary'),
@@ -1152,6 +1156,94 @@ function fetchStoriesForEpics(epicKeys) {
   return allStories;
 }
 
+/**
+ * Resolves parent names for issues where the parent summary wasn't included
+ * in the initial JIRA response. Fetches parent details in batches of 50.
+ * 
+ * This enriches epic data with their parent Initiative/Feature name,
+ * which is displayed as "Parent Name" on the main PI sheet.
+ *
+ * @param {Array} issues - All parsed issues (epics and children)
+ * @returns {Object} Map of parentKey -> { summary, status, issueType }
+ */
+function resolveParentNames(issues) {
+  const parentLookup = {};
+  
+  // Collect unique parent keys that are missing names
+  const missingParents = [];
+  const seenKeys = new Set();
+  
+  issues.forEach(issue => {
+    if (issue.parentKey && !issue.parentName && !seenKeys.has(issue.parentKey)) {
+      seenKeys.add(issue.parentKey);
+      missingParents.push(issue.parentKey);
+    }
+    // Also index known parents
+    if (issue.parentKey && issue.parentName) {
+      parentLookup[issue.parentKey] = {
+        summary: issue.parentName,
+        status: issue.parentStatus || '',
+        issueType: issue.parentType || ''
+      };
+    }
+  });
+  
+  if (missingParents.length === 0) {
+    console.log('All parent names already resolved from initial fetch');
+    return parentLookup;
+  }
+  
+  console.log(`Resolving ${missingParents.length} missing parent names...`);
+  
+  const url = JIRA_CONFIG.baseUrl + '/rest/api/3/search/jql';
+  const batchSize = 50;
+  
+  for (let i = 0; i < missingParents.length; i += batchSize) {
+    const batch = missingParents.slice(i, i + batchSize);
+    const jql = `key in (${batch.join(',')})`;
+    
+    try {
+      const payload = {
+        jql: jql,
+        maxResults: batch.length,
+        fields: ['summary', 'status', 'issuetype'],
+        fieldsByKeys: false
+      };
+      
+      const response = makeJiraRequest(url, 'POST', payload);
+      
+      if (response && response.issues) {
+        response.issues.forEach(issue => {
+          parentLookup[issue.key] = {
+            summary: issue.fields.summary || '',
+            status: issue.fields.status?.name || '',
+            issueType: issue.fields.issuetype?.name || ''
+          };
+        });
+        console.log(`  Batch ${Math.floor(i / batchSize) + 1}: resolved ${response.issues.length} parents`);
+      }
+    } catch (error) {
+      console.error(`Error fetching parent batch starting at index ${i}:`, error);
+    }
+    
+    Utilities.sleep(50);
+  }
+  
+  // Apply resolved names back to issues
+  let resolvedCount = 0;
+  issues.forEach(issue => {
+    if (issue.parentKey && !issue.parentName && parentLookup[issue.parentKey]) {
+      issue.parentName = parentLookup[issue.parentKey].summary;
+      issue.parentStatus = parentLookup[issue.parentKey].status;
+      issue.parentType = parentLookup[issue.parentKey].issueType;
+      resolvedCount++;
+    }
+  });
+  
+  console.log(`Resolved ${resolvedCount} parent names from ${Object.keys(parentLookup).length} unique parents`);
+  return parentLookup;
+}
+
 function fetchChildIssuesInBatchesOptimized(epicResults) {
   const childIssuesMap = {};
   const allEpicKeys = [];
@@ -1411,6 +1503,7 @@ function createDataRow(issue, hasMismatch, timestamp) {
   return [
     issue.key,
     issue.parentKey || '',
+    issue.parentName || '',
     issue.epicLink || '',
     issue.issueType,
     issue.summary,
@@ -1464,7 +1557,7 @@ function writeConsolidatedDataWithExistingWithHyperlinks(sheet, newIssues, exist
     
     // Updated headers to remove Analyzed Value Stream and add Momentum
     const headers = [
-      'Key', 'Parent Key', 'Epic Link', 'Issue Type', 'Summary', 'Status',
+      'Key', 'Parent Key', 'Parent Name', 'Epic Link', 'Issue Type', 'Summary', 'Status',
       'Value Stream', 'Org', 'PI Commitment', 'Program Increment', 'Scrum Team', 
       'PI Target Iteration', 'Iteration Start', 'Iteration End', 'Allocation', 
       'Portfolio Initiative', 'Program Initiative', 'RAG', 'RAG Note',
@@ -1848,11 +1941,9 @@ function updatePISheetForTeam(sheet, scrumTeamName, newIssues) {
     
     const currentTimestamp = new Date().toLocaleString();
     let updatedRows = 0;
-    let deletedRows = 0;
-    const addedRows = [];
-    const rowsToDelete = []; // Track rows to delete
+    let addedRows = [];
     
-    // PHASE 1: Update or mark for deletion
+    // Update existing rows for this team
     for (let i = 4; i < values.length; i++) {
       const row = values[i];
       if (!row) continue;
@@ -1860,64 +1951,39 @@ function updatePISheetForTeam(sheet, scrumTeamName, newIssues) {
       const rowKey = row[keyCol];
       const rowTeam = row[teamCol];
       
-      // Only process rows belonging to this team
-      if (rowTeam === scrumTeamName) {
-        if (rowKey && newIssueMap[rowKey]) {
-          // This row exists in JIRA - UPDATE IT
-          const updatedIssue = newIssueMap[rowKey];
-          const updatedRow = new Array(headers.length).fill('');
+      // If this row belongs to the team and we have updated data for it
+      if (rowTeam === scrumTeamName && rowKey && newIssueMap[rowKey]) {
+        const updatedIssue = newIssueMap[rowKey];
+        
+        // Update all fields from the fresh data
+        Object.keys(updatedIssue).forEach(field => {
+          const columnName = mapFieldToHeader(field);
+          const columnIndex = headers.indexOf(columnName);
           
-          // Map all fields from fresh data
-          Object.keys(updatedIssue).forEach(field => {
-            const columnName = mapFieldToHeader(field);
-            const columnIndex = headers.indexOf(columnName);
-            
-            if (columnIndex !== -1) {
-              updatedRow[columnIndex] = updatedIssue[field] || '';
-            }
-          });
-          
-          // Update timestamp
-          if (lastUpdatedCol !== -1) {
-            updatedRow[lastUpdatedCol] = currentTimestamp;
+          if (columnIndex !== -1) {
+            row[columnIndex] = updatedIssue[field] || '';
           }
-          
-          // Write this single row back immediately
-          sheet.getRange(i + 1, 1, 1, headers.length).setValues([updatedRow]);
-          updatedRows++;
-          
-          // Mark this issue as processed
-          delete newIssueMap[rowKey];
-          
-        } else {
-          // This row no longer exists in JIRA for this team - DELETE IT
-          rowsToDelete.push(i + 1); // Store 1-indexed row number
-          deletedRows++;
+        });
+        
+        // Update timestamp
+        if (lastUpdatedCol !== -1) {
+          row[lastUpdatedCol] = currentTimestamp;
         }
+        
+        updatedRows++;
+        // Mark this issue as processed
+        delete newIssueMap[rowKey];
       }
-      // Rows belonging to OTHER teams are left untouched
     }
     
-    // PHASE 2: Delete rows (in reverse order to maintain indices)
-    if (rowsToDelete.length > 0) {
-      console.log(`Deleting ${rowsToDelete.length} obsolete rows for ${scrumTeamName}`);
-      // Sort in descending order
-      rowsToDelete.sort((a, b) => b - a);
-      
-      rowsToDelete.forEach(rowIndex => {
-        sheet.deleteRow(rowIndex);
-      });
-    }
-    
-    // PHASE 3: Add any new issues that weren't in the sheet
+    // Add any new issues that weren't in the sheet
     Object.keys(newIssueMap).forEach(key => {
       const issue = newIssueMap[key];
       const newRow = new Array(headers.length).fill('');
       
       // Map issue properties to row
       Object.keys(issue).forEach(field => {
-        const columnName = mapFieldToHeader(field);
-        const columnIndex = headers.indexOf(columnName);
+        const columnIndex = headers.indexOf(mapFieldToHeader(field));
         if (columnIndex !== -1) {
           newRow[columnIndex] = issue[field] || '';
         }
@@ -1931,19 +1997,24 @@ function updatePISheetForTeam(sheet, scrumTeamName, newIssues) {
       addedRows.push(newRow);
     });
     
+    // Write back updated values
+    if (updatedRows > 0) {
+      sheet.getRange(1, 1, values.length, values[0].length).setValues(values);
+    }
+    
     // Append new rows if any
     if (addedRows.length > 0) {
       const startRow = sheet.getLastRow() + 1;
       sheet.getRange(startRow, 1, addedRows.length, headers.length).setValues(addedRows);
       
       // Apply hyperlinks to new rows
-      const newKeys = addedRows.map((row, idx) => row[keyCol]).filter(key => key);
+      const newKeys = addedRows.map(row => row[keyCol]).filter(key => key);
       if (newKeys.length > 0) {
         applyJiraHyperlinks(sheet, startRow, 1, newKeys);
       }
     }
     
-    console.log(`Team ${scrumTeamName}: Updated ${updatedRows} rows, deleted ${deletedRows} rows, added ${addedRows.length} new rows`);
+    console.log(`Updated ${updatedRows} rows and added ${addedRows.length} new rows for ${scrumTeamName}`);
     
   } catch (error) {
     console.error(`Error updating PI sheet for team ${scrumTeamName}:`, error);
@@ -2895,7 +2966,7 @@ function createScrumTeamSummary(allIssues, programIncrement, scrumTeam) {
     summarySheet.getRange(currentRow, 1).setValue('Note:');
     summarySheet.getRange(currentRow, 1).setFontWeight('bold').setFontStyle('italic').setFontSize(10);
     currentRow++;
-    summarySheet.getRange(currentRow, 1).setValue('• Anticipated = Feature Points calculated at the Epic level');
+    summarySheet.getRange(currentRow, 1).setValue('• Planned = Feature Points calculated at the Epic level');
     summarySheet.getRange(currentRow, 1).setFontStyle('italic').setFontSize(10).setFontColor('#666666');
     currentRow++;
     summarySheet.getRange(currentRow, 1).setValue('• Current = Total story points from all tickets within the Epic(s)');
@@ -3143,7 +3214,7 @@ function createPlanningProgressGauges(sheet, startRow, allIssues, epics, stories
   
   // Capacity allocation row
   sheet.getRange(startRow, 1, 1, 2).merge();
-  sheet.getRange(startRow, 1).setValue('% of Planned Capacity Allocated');
+  sheet.getRange(startRow, 1).setValue('% of Baseline Capacity Allocated');
   sheet.getRange(startRow, 3).setValue(`${percentCapacityAllocated}%`);
   sheet.getRange(startRow, 1, 1, 4).setFontSize(8);
   
@@ -3256,8 +3327,8 @@ function createAllocationChart(sheet, startRow, issues, scrumTeams, teamMetrics,
   
   // Headers for the chart data
   const chartHeaders = [
-    'Allocation Type', '', 'Planned Capacity', 'Anticipated Allocation',
-    'Anticipated Variance', '% Anticipated Variance', 'Current Capacity',
+    'Allocation Type', '', 'Planned Capacity', 'Planned Allocation',
+    'Planned Variance', '% Planned Variance', 'Current Capacity',
     'Current Variance', '% Current Variance'
   ];
   
@@ -3333,8 +3404,8 @@ function createAllocationChart(sheet, startRow, issues, scrumTeams, teamMetrics,
     sheet.getRange(rowNum, 4).setValue(data.anticipatedAllocation);
     
     // Set formulas for variances
-    sheet.getRange(rowNum, 5).setFormula(`=C${rowNum}-D${rowNum}`); // Anticipated Variance
-    sheet.getRange(rowNum, 6).setFormula(`=IF(C${rowNum}>0,ROUND(E${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Anticipated Variance
+    sheet.getRange(rowNum, 5).setFormula(`=C${rowNum}-D${rowNum}`); // Planned Variance
+    sheet.getRange(rowNum, 6).setFormula(`=IF(C${rowNum}>0,ROUND(E${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Planned Variance
     
     // Set current capacity value
     sheet.getRange(rowNum, 7).setValue(data.currentCapacity);
@@ -3387,8 +3458,8 @@ function createAllocationChart(sheet, startRow, issues, scrumTeams, teamMetrics,
   const lastDataRow = totalRow - 1;
   
   sheet.getRange(totalRow, 3).setFormula(`=SUM(C${firstDataRow}:C${lastDataRow})`); // Total Planned
-  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow})`); // Total Anticipated
-  sheet.getRange(totalRow, 5).setFormula(`=C${totalRow}-D${totalRow}`); // Total Anticipated Variance
+  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow})`); // Total Planned
+  sheet.getRange(totalRow, 5).setFormula(`=C${totalRow}-D${totalRow}`); // Total Planned Variance
   sheet.getRange(totalRow, 6).setFormula(`=IF(C${totalRow}>0,ROUND(E${totalRow}/C${totalRow}*100,0)&"%","0%")`);
   sheet.getRange(totalRow, 7).setFormula(`=SUM(G${firstDataRow}:G${lastDataRow})`); // Total Current
   sheet.getRange(totalRow, 8).setFormula(`=C${totalRow}-G${totalRow}`); // Total Current Variance
@@ -3433,7 +3504,7 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
   sheet.getRange(startRow, 1).setValue('Note:');
   sheet.getRange(startRow, 1).setFontWeight('bold').setFontStyle('italic').setFontSize(10);
   startRow++;
-  sheet.getRange(startRow, 1).setValue('• Anticipated = Feature Points calculated at the Epic level');
+  sheet.getRange(startRow, 1).setValue('• Planned = Feature Points calculated at the Epic level');
   sheet.getRange(startRow, 1).setFontStyle('italic').setFontSize(10).setFontColor('#666666');
   startRow++;
   sheet.getRange(startRow, 1).setValue('• Current = Total story points from all tickets within the Epic(s)');
@@ -3442,8 +3513,8 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
   
   // Headers for the chart data
   const chartHeaders = [
-    'Allocation Type', '', 'Planned Capacity', 'Anticipated Allocation',
-    'Anticipated Variance', '% Anticipated Variance', 'Current Capacity',
+    'Allocation Type', '', 'Planned Capacity', 'Planned Allocation',
+    'Planned Variance', '% Planned Variance', 'Current Capacity',
     'Current Variance', '% Current Variance'
   ];
   
@@ -3518,8 +3589,8 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
     sheet.getRange(rowNum, 4).setValue(data.anticipatedAllocation);
     
     // Set formulas for variances
-    sheet.getRange(rowNum, 5).setFormula(`=C${rowNum}-D${rowNum}`); // Anticipated Variance
-    sheet.getRange(rowNum, 6).setFormula(`=IF(C${rowNum}>0,ROUND(E${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Anticipated Variance
+    sheet.getRange(rowNum, 5).setFormula(`=C${rowNum}-D${rowNum}`); // Planned Variance
+    sheet.getRange(rowNum, 6).setFormula(`=IF(C${rowNum}>0,ROUND(E${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Planned Variance
     
     // Set current capacity value
     sheet.getRange(rowNum, 7).setValue(data.currentCapacity);
@@ -3569,8 +3640,8 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
   const lastDataRow = totalRow - 1;
   
   sheet.getRange(totalRow, 3).setFormula(`=SUM(C${firstDataRow}:C${lastDataRow})`); // Total Planned
-  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow})`); // Total Anticipated
-  sheet.getRange(totalRow, 5).setFormula(`=C${totalRow}-D${totalRow}`); // Total Anticipated Variance
+  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow})`); // Total Planned
+  sheet.getRange(totalRow, 5).setFormula(`=C${totalRow}-D${totalRow}`); // Total Planned Variance
   sheet.getRange(totalRow, 6).setFormula(`=IF(C${totalRow}>0,ROUND(E${totalRow}/C${totalRow}*100,0)&"%","0%")`);
   sheet.getRange(totalRow, 7).setFormula(`=SUM(G${firstDataRow}:G${lastDataRow})`); // Total Current
   sheet.getRange(totalRow, 8).setFormula(`=C${totalRow}-G${totalRow}`); // Total Current Variance
@@ -4025,7 +4096,7 @@ function createOverallPlanningProgress(sheet, startRow, allIssues, epics, storie
   startRow++;
   
   // Capacity allocation row
-  sheet.getRange(startRow, 1).setValue('% of Planned Capacity Allocated');
+  sheet.getRange(startRow, 1).setValue('% of Baseline Capacity Allocated');
   sheet.getRange(startRow, 2).setValue(`${percentCapacityAllocated}%`);
   sheet.getRange(startRow, 1, 1, 3).setFontSize(8);
   
@@ -4255,15 +4326,16 @@ function analyzeSelectedValueStreams(piNumber, selectedValueStreams, options = {
   try {
     showProgress(`Starting analysis for ${programIncrement} across all projects...`);
     
-    const cacheResponse = ui.alert(
-      'Data Source',
-      'Choose your data source:\n\n' +
-      '✓ YES = Use Cache (faster, uses recently fetched data)\n' +
-      '✓ NO = Refresh from JIRA (slower, gets the latest data)',
-      ui.ButtonSet.YES_NO
-    );
-
-const forceRefresh = (cacheResponse === ui.Button.NO);
+    // If called from dialog, skipCachePrompt is true and forceRefresh comes from options
+    let forceRefresh = options.forceRefresh || false;
+    
+    if (!options.skipCachePrompt) {
+      forceRefresh = ui.alert(
+        'Cache Option',
+        'Use cached data if available (faster) or force refresh from JIRA?',
+        ui.ButtonSet.YES_NO
+      ) === ui.Button.NO;
+    }
     
     if (forceRefresh) {
       CacheManager.clearPI(piNumber);
@@ -4282,11 +4354,15 @@ const forceRefresh = (cacheResponse === ui.Button.NO);
         summaryData = cachedData.summaryData;
         duplicateCount = cachedData.duplicateCount || 0;
         
-        ui.alert('Using Cached Data', 
-          `Using cached data from ${new Date(cachedData.timestamp).toLocaleTimeString()}\n` +
-          `Cache expires in ${Math.round((cachedData.timestamp + (CacheManager.CACHE_EXPIRATION_MINUTES * 60 * 1000) - Date.now()) / 60000)} minutes.`,
-          ui.ButtonSet.OK
-        );
+        if (!options.skipCachePrompt) {
+          ui.alert('Using Cached Data', 
+            `Using cached data from ${new Date(cachedData.timestamp).toLocaleTimeString()}\n` +
+            `Cache expires in ${Math.round((cachedData.timestamp + (CacheManager.CACHE_EXPIRATION_MINUTES * 60 * 1000) - Date.now()) / 60000)} minutes.`,
+            ui.ButtonSet.OK
+          );
+        } else {
+          console.log('Using cached data (dialog mode, no prompt)');
+        }
       }
     }
     
@@ -4447,6 +4523,10 @@ const forceRefresh = (cacheResponse === ui.Button.NO);
     }
 
     allIssues = validateAndCleanJiraData(allIssues);
+
+    // Resolve parent names for epics (Initiative/Feature above the epic)
+    showProgress('Resolving parent initiative names...');
+    resolveParentNames(allIssues);
 
     showProgress('Writing data to sheet...');
     writeConsolidatedDataWithExistingWithHyperlinks(piSheet, allIssues, existingData, programIncrement);
