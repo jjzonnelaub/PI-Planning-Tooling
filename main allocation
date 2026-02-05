@@ -105,7 +105,8 @@ function processEpicData(epic, analyzedValueStream) {
     storyPoints: 0, // Epics don't have story points
     storyPointEstimate: parseFloat(fields.customfield_10016) || 0,
     epicLink: '',
-    parentKey: '',
+    parentKey: fields.parent?.key || '',
+    parentName: fields.parent?.fields?.summary || '',
     featurePoints: parseFloat(fields.customfield_10252) || 0,
     loeEstimate: loeEstimate,
     programIncrement: fields.customfield_10113 || '',
@@ -151,6 +152,7 @@ function processChildData(child, epicKey, analyzedValueStream) {
     storyPointEstimate: 0, // Children don't have estimates
     epicLink: fields.customfield_10014 || epicKey,
     parentKey: fields.parent?.key || '',
+    parentName: fields.parent?.fields?.summary || '',
     featurePoints: 0, // Children don't have feature points
     loeEstimate: 0, // Children don't have LOE
     programIncrement: fields.customfield_10113 || '',
@@ -192,6 +194,7 @@ function createPIAnalysisSheet(sheetName, issues, analyzedValueStreams) {
     'Story Point Estimate',
     'Epic Link',
     'Parent',
+    'Parent Name',
     'Feature Points',
     'LOE Estimate',
     'Program Increment',
@@ -239,6 +242,7 @@ function createPIAnalysisSheet(sheetName, issues, analyzedValueStreams) {
       issue.storyPointEstimate,
       issue.epicLink,
       issue.parentKey,
+      issue.parentName || '',
       issue.featurePoints,
       issue.loeEstimate,
       issue.programIncrement,
