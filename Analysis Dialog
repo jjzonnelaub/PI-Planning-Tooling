@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: 'Comfortaa', sans-serif; background-color: #f5f3f7; padding: 16px; color: #333; }
+      
+      .container { max-width: 420px; margin: 0 auto; }
+      
+      /* Section headers */
+      .section-label {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: #6B46C1;
+        margin-bottom: 8px;
+      }
+      
+      .section { margin-bottom: 16px; }
+      
+      /* PI Number selector */
+      .pi-selector {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .pi-btn {
+        padding: 8px 16px;
+        border: 2px solid #d4c5e8;
+        border-radius: 8px;
+        background: white;
+        color: #6B46C1;
+        font-family: 'Comfortaa', sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .pi-btn:hover { background: #f0ebf7; }
+      .pi-btn.active {
+        background: #6B46C1;
+        color: white;
+        border-color: #6B46C1;
+      }
+      
+      /* Value stream chips */
+      .chip-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .chip {
+        padding: 8px 14px;
+        border: 2px solid #d4c5e8;
+        border-radius: 20px;
+        background: white;
+        color: #555;
+        font-family: 'Comfortaa', sans-serif;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        user-select: none;
+      }
+      .chip:hover { background: #f0ebf7; border-color: #9F7AEA; }
+      .chip.active {
+        background: #6B46C1;
+        color: white;
+        border-color: #6B46C1;
+      }
+      .chip.active:hover { background: #805AD5; }
+      
+      /* Preset buttons */
+      .presets {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .preset-btn {
+        padding: 4px 10px;
+        border: 1px solid #c4b5d9;
+        border-radius: 12px;
+        background: #EDE9FE;
+        color: #6B46C1;
+        font-family: 'Comfortaa', sans-serif;
+        font-size: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .preset-btn:hover { background: #ddd6fe; }
+      
+      /* Report toggles */
+      .report-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .report-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border: 1px solid #e2dce8;
+        border-radius: 8px;
+        background: white;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .report-toggle:hover { border-color: #9F7AEA; }
+      .report-toggle.active { border-color: #6B46C1; background: #f8f5ff; }
+      .report-toggle input { display: none; }
+      .report-toggle .toggle-dot {
+        width: 16px;
+        height: 16px;
+        border: 2px solid #c4b5d9;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: all 0.15s ease;
+      }
+      .report-toggle.active .toggle-dot {
+        background: #6B46C1;
+        border-color: #6B46C1;
+      }
+      .report-toggle.active .toggle-dot::after {
+        content: '\2713';
+        color: white;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .report-toggle .toggle-label {
+        font-size: 11px;
+        font-weight: 500;
+        color: #555;
+      }
+      .report-toggle.active .toggle-label { color: #6B46C1; }
+      
+      /* Options row */
+      .options-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .option-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border: 1px solid #e2dce8;
+        border-radius: 8px;
+        background: white;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 500;
+        color: #555;
+        transition: all 0.15s ease;
+        font-family: 'Comfortaa', sans-serif;
+      }
+      .option-toggle:hover { border-color: #9F7AEA; }
+      .option-toggle.active { border-color: #6B46C1; background: #f8f5ff; color: #6B46C1; }
+      .option-toggle input { display: none; }
+      
+      /* Run button */
+      .run-btn {
+        width: 100%;
+        padding: 14px;
+        border: none;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #6B46C1, #805AD5);
+        color: white;
+        font-family: 'Comfortaa', sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        letter-spacing: 0.5px;
+      }
+      .run-btn:hover { background: linear-gradient(135deg, #553C9A, #6B46C1); transform: translateY(-1px); }
+      .run-btn:disabled { background: #b8a9d4; cursor: not-allowed; transform: none; }
+      
+      /* Status */
+      #status {
+        margin-top: 10px;
+        text-align: center;
+        font-size: 12px;
+        color: #6B46C1;
+        min-height: 18px;
+      }
+      #status.error { color: #E85D4C; }
+      
+      /* Divider */
+      .divider {
+        height: 1px;
+        background: #e2dce8;
+        margin: 12px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- PI Number -->
+      <div class="section">
+        <div class="section-label">Program Increment</div>
+        <div class="pi-selector" id="piSelector">
+          <button class="pi-btn" data-pi="12" onclick="selectPI(this)">PI 12</button>
+          <button class="pi-btn" data-pi="13" onclick="selectPI(this)">PI 13</button>
+          <button class="pi-btn active" data-pi="14" onclick="selectPI(this)">PI 14</button>
+          <button class="pi-btn" data-pi="15" onclick="selectPI(this)">PI 15</button>
+          <button class="pi-btn" data-pi="16" onclick="selectPI(this)">PI 16</button>
+        </div>
+      </div>
+      
+      <!-- Value Streams -->
+      <div class="section">
+        <div class="section-label">Value Streams</div>
+        <div class="presets">
+          <button class="preset-btn" onclick="selectPreset('all')">Select All</button>
+          <button class="preset-btn" onclick="selectPreset('clinical')">Clinical</button>
+          <button class="preset-btn" onclick="selectPreset('mmpm')">MMPM</button>
+          <button class="preset-btn" onclick="selectPreset('none')">Clear</button>
+        </div>
+        <div class="chip-grid" id="vsChips">
+          <div class="chip" data-vs="EMA Clinical" onclick="toggleChip(this)">EMA Clinical</div>
+          <div class="chip" data-vs="EMA RAC" onclick="toggleChip(this)">EMA RAC</div>
+          <div class="chip" data-vs="MMPM" onclick="toggleChip(this)">MMPM</div>
+          <div class="chip" data-vs="RCM Genie" onclick="toggleChip(this)">RCM Genie</div>
+          <div class="chip" data-vs="AIMM" onclick="toggleChip(this)">AIMM</div>
+        </div>
+      </div>
+      
+      <div class="divider"></div>
+      
+      <!-- Reports -->
+      <div class="section">
+        <div class="section-label">Include Reports</div>
+        <div class="report-grid">
+          <label class="report-toggle active" onclick="toggleReport(this)">
+            <input type="checkbox" name="reports" value="teamSummaries" checked>
+            <span class="toggle-dot"></span>
+            <span class="toggle-label">Team Summaries</span>
+          </label>
+          <label class="report-toggle active" onclick="toggleReport(this)">
+            <input type="checkbox" name="reports" value="vsSummaries" checked>
+            <span class="toggle-dot"></span>
+            <span class="toggle-label">VS Summaries</span>
+          </label>
+          <label class="report-toggle" onclick="toggleReport(this)">
+            <input type="checkbox" name="reports" value="dansReport">
+            <span class="toggle-dot"></span>
+            <span class="toggle-label">Dan's Report</span>
+          </label>
+          <label class="report-toggle" onclick="toggleReport(this)">
+            <input type="checkbox" name="reports" value="dashboard">
+            <span class="toggle-dot"></span>
+            <span class="toggle-label">PI Dashboard</span>
+          </label>
+        </div>
+      </div>
+      
+      <div class="divider"></div>
+      
+      <!-- Options -->
+      <div class="section">
+        <div class="section-label">Options</div>
+        <div class="options-row">
+          <label class="option-toggle" onclick="toggleOption(this)">
+            <input type="checkbox" name="forceRefresh">
+            Force Refresh (skip cache)
+          </label>
+        </div>
+      </div>
+      
+      <!-- Run -->
+      <div class="section" style="margin-top: 12px;">
+        <button class="run-btn" id="runButton" onclick="runAnalysis()">
+          Run Analysis
+        </button>
+        <div id="status"></div>
+      </div>
+    </div>
+    
+    <script>
+      // State
+      var selectedPI = '14';
+      var selectedVS = {};
+      
+      function selectPI(el) {
+        var btns = document.querySelectorAll('.pi-btn');
+        for (var i = 0; i < btns.length; i++) btns[i].classList.remove('active');
+        el.classList.add('active');
+        selectedPI = el.getAttribute('data-pi');
+      }
+      
+      function toggleChip(el) {
+        el.classList.toggle('active');
+        var vs = el.getAttribute('data-vs');
+        if (el.classList.contains('active')) {
+          selectedVS[vs] = true;
+        } else {
+          delete selectedVS[vs];
+        }
+      }
+      
+      function selectPreset(preset) {
+        var chips = document.querySelectorAll('.chip');
+        selectedVS = {};
+        
+        for (var i = 0; i < chips.length; i++) {
+          var c = chips[i];
+          c.classList.remove('active');
+          var vs = c.getAttribute('data-vs');
+          var shouldSelect = false;
+          
+          if (preset === 'all') shouldSelect = true;
+          else if (preset === 'clinical') shouldSelect = (vs === 'EMA Clinical' || vs === 'EMA RAC' || vs === 'AIMM');
+          else if (preset === 'mmpm') shouldSelect = (vs === 'MMPM');
+          
+          if (shouldSelect) {
+            c.classList.add('active');
+            selectedVS[vs] = true;
+          }
+        }
+      }
+      
+      function toggleReport(el) {
+        el.classList.toggle('active');
+        var cb = el.querySelector('input');
+        cb.checked = el.classList.contains('active');
+      }
+      
+      function toggleOption(el) {
+        el.classList.toggle('active');
+        var cb = el.querySelector('input');
+        cb.checked = el.classList.contains('active');
+      }
+      
+      function runAnalysis() {
+        var button = document.getElementById('runButton');
+        var status = document.getElementById('status');
+        status.className = '';
+        
+        if (!selectedPI) {
+          status.innerText = 'Please select a PI number.';
+          status.className = 'error';
+          return;
+        }
+        
+        var valueStreams = Object.keys(selectedVS);
+        if (valueStreams.length === 0) {
+          status.innerText = 'Please select at least one value stream.';
+          status.className = 'error';
+          return;
+        }
+        
+        button.disabled = true;
+        status.innerText = 'Starting analysis... Please wait.';
+        
+        var reportCheckboxes = document.querySelectorAll('input[name="reports"]:checked');
+        var reports = [];
+        for (var i = 0; i < reportCheckboxes.length; i++) {
+          reports.push(reportCheckboxes[i].value);
+        }
+        var forceRefresh = document.querySelector('input[name="forceRefresh"]').checked;
+        
+        var options = {
+          piNumber: selectedPI,
+          valueStreams: valueStreams,
+          reports: reports,
+          forceRefresh: forceRefresh
+        };
+        
+        google.script.run
+          .withSuccessHandler(function() {
+            status.innerText = 'Analysis complete!';
+            setTimeout(function() { google.script.host.close(); }, 1500);
+          })
+          .withFailureHandler(function(err) {
+            status.innerText = 'Error: ' + err.message;
+            status.className = 'error';
+            button.disabled = false;
+          })
+          .runAnalysisFromDialog(options);
+      }
+    </script>
+  </body>
+</html>
