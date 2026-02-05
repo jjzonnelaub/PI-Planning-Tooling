@@ -208,7 +208,7 @@ function createValueStreamPlanningProgress(sheet, startRow, allIssues, epics, st
     .setVerticalAlignment('middle');
   startRow++;
   
-  sheet.getRange(startRow, 1).setValue('% of capacity used');
+  sheet.getRange(startRow, 1).setValue('% of baseline capacity used');
   sheet.getRange(startRow, 3).setValue(capacityStatus);
   sheet.getRange(startRow, 1, 1, 4).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
   
@@ -591,7 +591,7 @@ function createIterationSlottingChart(sheet, startRow, issues, scrumTeam, progra
   // Data rows
   const iterations = [
     'Iteration 1', 'Iteration 2', 'Iteration 3', 'Iteration 4', 
-    'Iteration 5', 'Iteration 6', 'Total (5 iterations)', 'Total (6 iterations)'
+    'Iteration 5', 'Iteration 6', 'Total (4 iterations)', 'Total (6 iterations)'
   ];
   
   const dataStartRow = headerRow + 1;
@@ -679,17 +679,17 @@ function createIterationSlottingChart(sheet, startRow, issues, scrumTeam, progra
       
     } else if (iterationNum === 7) {
       // Total (4 iterations)
-      sheet.getRange(currentRow, 2).setFormula(`=SUM(B${dataStartRow}:B${dataStartRow + 4})`);
-      sheet.getRange(currentRow, 3).setFormula(`=SUM(C${dataStartRow}:C${dataStartRow + 4})`);
+      sheet.getRange(currentRow, 2).setFormula(`=SUM(B${dataStartRow}:B${dataStartRow + 3})`);
+      sheet.getRange(currentRow, 3).setFormula(`=SUM(C${dataStartRow}:C${dataStartRow + 3})`);
       sheet.getRange(currentRow, 4).setValue(Math.round(slottedData.product.total4 || 0));
       sheet.getRange(currentRow, 5).setFormula(`=C${currentRow}-D${currentRow}`);
-      sheet.getRange(currentRow, 6).setFormula(`=SUM(F${dataStartRow}:F${dataStartRow + 4})`);
+      sheet.getRange(currentRow, 6).setFormula(`=SUM(F${dataStartRow}:F${dataStartRow + 3})`);
       sheet.getRange(currentRow, 7).setValue(Math.round(slottedData.tech.total4 || 0));
       sheet.getRange(currentRow, 8).setFormula(`=F${currentRow}-G${currentRow}`);
-      sheet.getRange(currentRow, 9).setFormula(`=SUM(I${dataStartRow}:I${dataStartRow + 4})`);
-      sheet.getRange(currentRow, 10).setValue(Math.round(slottedData.quality.total4 || 0)); 
+      sheet.getRange(currentRow, 9).setFormula(`=SUM(I${dataStartRow}:I${dataStartRow + 3})`);
+      sheet.getRange(currentRow, 10).setValue(Math.round(slottedData.quality.total4 || 0));
       sheet.getRange(currentRow, 11).setFormula(`=I${currentRow}-J${currentRow}`);
-      sheet.getRange(currentRow, 12).setFormula(`=SUM(L${dataStartRow}:L${dataStartRow + 4})`);
+      sheet.getRange(currentRow, 12).setFormula(`=SUM(L${dataStartRow}:L${dataStartRow + 3})`);
       
       // Bold and darker grey background for totals
       sheet.getRange(currentRow, 1, 1, headers.length).setFontWeight('bold');
@@ -1088,7 +1088,7 @@ function createTeamPlanningProgressGauges(sheet, startRow, allIssues, epics, sto
   startRow++;
   
   // % of capacity used row
-  sheet.getRange(startRow, 1).setValue('% of capacity used');
+  sheet.getRange(startRow, 1).setValue('% of baseline capacity used');
   sheet.getRange(startRow, 3).setValue(capacityUsedStatus);
   sheet.getRange(startRow, 1, 1, 4).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
   
@@ -1147,8 +1147,8 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
   
   // Updated headers with new column names and additional columns
   const chartHeaders = [
-    'Allocation Type', '', 'Planned Capacity', 'Anticipated Allocation',
-    'Anticipated Variance', '% Anticipated Variance', 'Story points planned for PI',
+    'Allocation Type', '', 'Planned Capacity', 'Planned Allocation',
+    'Planned Variance', '% Planned Variance', 'Story points planned for PI',
     'Current Variance', '% still available for PI',
     'Capacity prior to Code Freeze', 'Remaining overall prior to Code Freeze', '% availability prior to code freeze',
     'Slotted code freeze capacity', 'Slotted Code Freeze variance', '% Code Freeze Availability'
@@ -1412,14 +1412,14 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
   
   // Sum formulas for numeric columns only (not percentage columns)
   sheet.getRange(totalRow, 3).setFormula(`=SUM(C${firstDataRow}:C${lastDataRow})`); // Planned Capacity
-  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow - 1})`); // Anticipated Allocation (exclude unplanned)
+  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow - 1})`); // Planned Allocation (exclude unplanned)
   sheet.getRange(totalRow, 7).setFormula(`=SUM(G${firstDataRow}:G${lastDataRow})`); // Story points planned
   sheet.getRange(totalRow, 10).setFormula(`=SUM(J${firstDataRow}:J${lastDataRow - 1})`); // Capacity prior to Code Freeze (exclude unplanned)
   sheet.getRange(totalRow, 13).setFormula(`=SUM(M${firstDataRow}:M${lastDataRow})`); // Slotted code freeze capacity
   
   // Leave percentage and variance columns blank
-  sheet.getRange(totalRow, 5).setValue(''); // Anticipated Variance
-  sheet.getRange(totalRow, 6).setValue(''); // % Anticipated Variance
+  sheet.getRange(totalRow, 5).setValue(''); // Planned Variance
+  sheet.getRange(totalRow, 6).setValue(''); // % Planned Variance
   sheet.getRange(totalRow, 8).setValue(''); // Current Variance
   sheet.getRange(totalRow, 9).setValue(''); // % still available
   sheet.getRange(totalRow, 11).setValue(''); // Remaining overall
