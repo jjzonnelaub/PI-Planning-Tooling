@@ -1680,7 +1680,7 @@ function createScrumTeamSummary(allIssues, programIncrement, scrumTeam, targetSp
     currentRow += 2;
 
     // Add Allocation Analysis Chart (shows actual planned work vs capacity)
-    const allocationResult = createTeamAllocationChart(sheet, currentRow, teamIssues, scrumTeam);
+    const allocationResult = createTeamAllocationChart(sheet, currentRow, teamIssues, scrumTeam, capacitySpreadsheet);
     currentRow = allocationResult.nextRow;
     currentRow += 2;
 
@@ -2082,11 +2082,21 @@ function createPlannedCapacityDistributionChart(sheet, startRow, scrumTeam, capa
   return startRow + 1;
 }
 
-function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
+function createTeamAllocationChart(sheet, startRow, issues, scrumTeam, capacitySpreadsheet) {
   console.log(`Creating allocation chart for team: ${scrumTeam}`);
 
   const epics = issues.filter(i => i.issueType === 'Epic');
   const stories = issues.filter(i => i.issueType !== 'Epic');
+
+  // Get capacity data from consolidated capacity sheet (same source as Planned Capacity Distribution chart)
+  let capacityData = null;
+  try {
+    if (typeof getCapacityDataForTeamConsolidated === 'function' && capacitySpreadsheet) {
+      capacityData = getCapacityDataForTeamConsolidated(capacitySpreadsheet, scrumTeam);
+    }
+  } catch (e) {
+    console.log(`Error getting capacity data for allocation chart: ${e.message}`);
+  }
 
   // Title for chart section - Clear any existing formatting and fill ALL columns (A through O) with purple
   sheet.getRange(startRow, 1, 1, 15).clearFormat(); // Clear any existing formatting first
@@ -2100,7 +2110,7 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
 
   // Updated headers with new column names and additional columns
   const chartHeaders = [
-    'Allocation Type', '', 'Baseline Capacity', 'PLANNED Allocation',
+    'Allocation Type', '', 'Planned Capacity', 'PLANNED Allocation',
     'PLANNED Availability', '% PLANNED Availability', 'Story points planned for PI',
     'Current Availability', '% still available for PI',
     'Capacity prior to Code Freeze', 'Remaining for Use overall prior to Code Freeze', '% availability prior to code freeze',
@@ -2139,13 +2149,13 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
   const piNumber = piMatch ? parseInt(piMatch[1]) : null;
   const isPI11or12 = piNumber === 11 || piNumber === 12;
 
-  // Define allocation categories
+  // Define allocation categories with capacity data keys matching getCapacityDataForTeamConsolidated()
   const allocations = [
-    { name: 'Features (Product - Compliance & Feature)', capacityColumn: 'B', columnIndex: 2 },
-    { name: 'Tech / Platform', capacityColumn: 'C', columnIndex: 3 },
-    { name: 'Planned KLO', capacityColumn: 'D', columnIndex: 4 },
-    { name: 'Planned Quality', capacityColumn: 'E', columnIndex: 5 },
-    { name: 'Unplanned Quality', capacityColumn: 'F', columnIndex: 6, isUnplanned: true }
+    { name: 'Features (Product - Compliance & Feature)', capacityColumn: 'B', columnIndex: 2, getCapacity: (allocs) => (allocs.productFeature || 0) + (allocs.productCompliance || 0) },
+    { name: 'Tech / Platform', capacityColumn: 'C', columnIndex: 3, getCapacity: (allocs) => allocs.techPlatform || 0 },
+    { name: 'Planned KLO', capacityColumn: 'D', columnIndex: 4, getCapacity: (allocs) => allocs.klo || 0 },
+    { name: 'Planned Quality', capacityColumn: 'E', columnIndex: 5, getCapacity: (allocs) => allocs.quality || 0 },
+    { name: 'Unplanned Quality', capacityColumn: 'F', columnIndex: 6, isUnplanned: true, getCapacity: (allocs) => allocs.unplannedWork || 0 }
   ];
 
   // Calculate anticipated and current allocations
@@ -2242,10 +2252,15 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
     sheet.getRange(rowNum, 1).setValue(alloc.name);
     sheet.getRange(rowNum, 1).setWrap(false);  // Turn off text wrapping
 
-    // Set FORMULA for planned capacity with flexible team name matching
-    // This formula handles case differences and attempts to match team names flexibly
-    const capacityFormula = `=IFERROR(INDEX(Capacity!${alloc.capacityColumn}:${alloc.capacityColumn},MATCH(UPPER(TRIM("${scrumTeam}")),ARRAYFORMULA(UPPER(TRIM(Capacity!A:A))),0)),0)`;
-    sheet.getRange(rowNum, 3).setFormula(capacityFormula);
+    // Set Planned Capacity value from consolidated capacity data (same source as Planned Capacity Distribution chart)
+    if (capacityData && capacityData.allocations) {
+      const capacityValue = Math.round(alloc.getCapacity(capacityData.allocations));
+      sheet.getRange(rowNum, 3).setValue(capacityValue);
+    } else {
+      // Fallback to formula if consolidated capacity data not available
+      const capacityFormula = `=IFERROR(INDEX(Capacity!${alloc.capacityColumn}:${alloc.capacityColumn},MATCH(UPPER(TRIM("${scrumTeam}")),ARRAYFORMULA(UPPER(TRIM(Capacity!A:A))),0)),0)`;
+      sheet.getRange(rowNum, 3).setFormula(capacityFormula);
+    }
 
     // Handle Unplanned Quality row differently
     if (alloc.isUnplanned) {
@@ -2296,7 +2311,7 @@ function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
   sheet.getRange(startRow, 2, allocations.length, chartHeaders.length - 1).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
 
   // IMPORTANT: Set number format for columns D and E (and other numeric columns) to prevent % auto-formatting
-  sheet.getRange(startRow, 3, allocations.length, 1).setNumberFormat('0');  // Column C - Baseline Capacity
+  sheet.getRange(startRow, 3, allocations.length, 1).setNumberFormat('0');  // Column C - Planned Capacity
   sheet.getRange(startRow, 4, allocations.length, 1).setNumberFormat('0');  // Column D - PLANNED Allocation
   sheet.getRange(startRow, 5, allocations.length, 1).setNumberFormat('0');  // Column E - PLANNED Availability
   sheet.getRange(startRow, 7, allocations.length, 1).setNumberFormat('0');  // Column G - Story points planned
