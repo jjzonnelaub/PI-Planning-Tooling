@@ -411,44 +411,6 @@ function calculateSlottedData(issues, piNumber, scrumTeam) {
   return slottedData;
 }
 
-// ===== ROLE BREAKDOWN FUNCTIONS =====
-
-/**
- * Role name normalization mapping
- * Maps various role names to standardized keys
- */
-const ROLE_NORMALIZATION = {
-  // QA variations
-  'QA': 'QA',
-  'AQA': 'QA',
-  'QUALITY': 'QA',
-  
-  // Web Development
-  'W-DEV': 'W-DEV',
-  'WDEV': 'W-DEV',
-  'WEB': 'W-DEV',
-  'WEB-DEV': 'W-DEV',
-  'WEBDEV': 'W-DEV',
-  
-  // Mobile Development
-  'M-DEV': 'M-DEV',
-  'MDEV': 'M-DEV',
-  'MOBILE': 'M-DEV',
-  'MOBILE-DEV': 'M-DEV',
-  'M-ANDROID': 'M-DEV',
-  'M-IOS': 'M-DEV',
-  
-  // Backend
-  'BE': 'BE',
-  'BACKEND': 'BE',
-  'BACK-END': 'BE',
-  
-  // Frontend
-  'FE': 'FE',
-  'FRONTEND': 'FE',
-  'FRONT-END': 'FE'
-};
-
 /**
  * Get roles and their capacities for a team from the consolidated capacity sheet
  * Combines Before FF and After FF capacities for each role
