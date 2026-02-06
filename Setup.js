@@ -1,20 +1,20 @@
 /**
  * Setup.gs - Credential Setup and Saved Reports Management
  * =========================================================
- * 
- * Manages sensitive credentials and saved report URLs using 
+ *
+ * Manages sensitive credentials and saved report URLs using
  * Google Apps Script Properties.
- * 
+ *
  * FIRST TIME SETUP:
  * 1. Open the spreadsheet
  * 2. Run "JIRA Analysis > Setup > Configure JIRA Credentials"
  * 3. Enter your JIRA email and API token
- * 
+ *
  * TO GET A JIRA API TOKEN:
  * 1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
  * 2. Click "Create API token"
  * 3. Copy the token (you won't see it again)
- * 
+ *
  * @fileoverview Credential and saved reports management
  * @version 1.0.0
  */
@@ -38,7 +38,7 @@ const PROP_KEYS = {
  */
 function isJiraConfigured() {
   const props = PropertiesService.getScriptProperties();
-  return !!(props.getProperty(PROP_KEYS.JIRA_EMAIL) && 
+  return !!(props.getProperty(PROP_KEYS.JIRA_EMAIL) &&
             props.getProperty(PROP_KEYS.JIRA_API_TOKEN));
 }
 
@@ -48,15 +48,15 @@ function isJiraConfigured() {
  */
 function getJiraCredentials() {
   const props = PropertiesService.getScriptProperties();
-  
+
   const email = props.getProperty(PROP_KEYS.JIRA_EMAIL);
   const token = props.getProperty(PROP_KEYS.JIRA_API_TOKEN);
   const baseUrl = props.getProperty(PROP_KEYS.JIRA_BASE_URL) || 'https://modmedrnd.atlassian.net';
-  
+
   if (!email || !token) {
     return null;
   }
-  
+
   return { email, apiToken: token, baseUrl };
 }
 
@@ -70,16 +70,16 @@ function getJiraCredentials() {
 function saveJiraCredentials(email, apiToken, baseUrl) {
   try {
     const props = PropertiesService.getScriptProperties();
-    
+
     props.setProperty(PROP_KEYS.JIRA_EMAIL, email.trim());
     props.setProperty(PROP_KEYS.JIRA_API_TOKEN, apiToken.trim());
-    
+
     if (baseUrl) {
       props.setProperty(PROP_KEYS.JIRA_BASE_URL, baseUrl.trim().replace(/\/$/, ''));
     }
-    
+
     props.setProperty(PROP_KEYS.SETUP_COMPLETE, 'true');
-    
+
     console.log('✅ JIRA credentials saved successfully');
     return true;
   } catch (error) {
@@ -118,7 +118,7 @@ function clearJiraCredentials() {
  */
 function getJiraConfig() {
   const creds = getJiraCredentials();
-  
+
   if (!creds) {
     console.warn('⚠️ JIRA credentials not configured. Run Setup > Configure JIRA Credentials');
     return {
@@ -127,7 +127,7 @@ function getJiraConfig() {
       apiToken: ''
     };
   }
-  
+
   return {
     baseUrl: creds.baseUrl,
     email: creds.email,
@@ -147,20 +147,20 @@ function getSavedReports() {
   try {
     const props = PropertiesService.getScriptProperties();
     const savedReportsJson = props.getProperty(PROP_KEYS.SAVED_REPORTS);
-    
+
     if (!savedReportsJson) {
       return [];
     }
-    
+
     const reports = JSON.parse(savedReportsJson);
-    
+
     // Sort by date added (newest first)
     reports.sort((a, b) => {
       const dateA = a.dateAdded ? new Date(a.dateAdded) : new Date(0);
       const dateB = b.dateAdded ? new Date(b.dateAdded) : new Date(0);
       return dateB - dateA;
     });
-    
+
     return reports;
   } catch (error) {
     console.error('Error getting saved reports:', error);
@@ -177,9 +177,9 @@ function getSavedReports() {
 function saveReport(label, url) {
   try {
     const props = PropertiesService.getScriptProperties();
-    
+
     let reports = getSavedReports();
-    
+
     // Check if URL already exists - update label if so
     const existingIndex = reports.findIndex(r => r.url === url);
     if (existingIndex >= 0) {
@@ -194,7 +194,7 @@ function saveReport(label, url) {
       });
       console.log(`Saved new report: ${label}`);
     }
-    
+
     props.setProperty(PROP_KEYS.SAVED_REPORTS, JSON.stringify(reports));
     return true;
   } catch (error) {
@@ -211,16 +211,16 @@ function saveReport(label, url) {
 function deleteSavedReport(url) {
   try {
     const props = PropertiesService.getScriptProperties();
-    
+
     let reports = getSavedReports();
     const originalLength = reports.length;
     reports = reports.filter(r => r.url !== url);
-    
+
     if (reports.length === originalLength) {
       console.log('Report not found for deletion');
       return false;
     }
-    
+
     props.setProperty(PROP_KEYS.SAVED_REPORTS, JSON.stringify(reports));
     console.log('Report deleted successfully');
     return true;
@@ -257,7 +257,7 @@ function showCredentialSetupDialog() {
   const currentCreds = getJiraCredentials();
   const hasExisting = !!currentCreds;
   const defaultBaseUrl = 'https://modmedrnd.atlassian.net';
-  
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -286,7 +286,7 @@ function showCredentialSetupDialog() {
       </head>
       <body>
         <h3 style="color: #1B365D; border-bottom: 3px solid #FFC72C; padding-bottom: 10px;">Configure JIRA Credentials</h3>
-        
+
         ${hasExisting ? `
           <div class="success-box">
             ✓ Credentials configured for: <strong>${currentCreds.email}</strong>
@@ -296,13 +296,13 @@ function showCredentialSetupDialog() {
             Enter your JIRA credentials below. These are stored securely in Script Properties and never appear in the code.
           </div>
         `}
-        
+
         <div class="form-group">
           <label for="email">JIRA Email Address</label>
-          <input type="text" id="email" placeholder="your.email@modmed.com" 
+          <input type="text" id="email" placeholder="your.email@modmed.com"
                  value="${hasExisting ? currentCreds.email : ''}">
         </div>
-        
+
         <div class="form-group">
           <label for="token">JIRA API Token</label>
           <input type="password" id="token" placeholder="Enter your API token">
@@ -312,38 +312,38 @@ function showCredentialSetupDialog() {
             </a>
           </div>
         </div>
-        
+
         <div class="form-group">
           <label for="baseUrl">JIRA Base URL</label>
-          <input type="text" id="baseUrl" 
+          <input type="text" id="baseUrl"
                  value="${hasExisting && currentCreds.baseUrl ? currentCreds.baseUrl : defaultBaseUrl}">
           <div class="help-text">Only change if using a different JIRA instance</div>
         </div>
-        
+
         <div id="status"></div>
-        
+
         <div class="button-group">
           ${hasExisting ? '<button class="danger" onclick="clearCreds()">Clear Credentials</button>' : ''}
           <button class="secondary" onclick="google.script.host.close()">Cancel</button>
           <button class="primary" onclick="saveCreds()">Save & Test</button>
         </div>
-        
+
         <script>
           function saveCreds() {
             const email = document.getElementById('email').value.trim();
             const token = document.getElementById('token').value.trim();
             const baseUrl = document.getElementById('baseUrl').value.trim();
             const status = document.getElementById('status');
-            
+
             if (!email || !token) {
               status.className = 'error';
               status.innerText = 'Please enter both email and API token.';
               return;
             }
-            
+
             status.className = '';
             status.innerText = 'Saving and testing connection...';
-            
+
             google.script.run
               .withSuccessHandler(function(result) {
                 if (result) {
@@ -361,10 +361,10 @@ function showCredentialSetupDialog() {
               })
               .saveJiraCredentials(email, token, baseUrl);
           }
-          
+
           function clearCreds() {
             if (!confirm('Clear your JIRA credentials? You will need to reconfigure them to use the system.')) return;
-            
+
             google.script.run
               .withSuccessHandler(function() {
                 document.getElementById('status').className = 'success';
@@ -377,11 +377,11 @@ function showCredentialSetupDialog() {
       </body>
     </html>
   `;
-  
+
   const htmlOutput = HtmlService.createHtmlOutput(html)
     .setWidth(450)
     .setHeight(hasExisting ? 480 : 420);
-  
+
   SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'JIRA Setup');
 }
 
@@ -391,11 +391,11 @@ function showCredentialSetupDialog() {
  */
 function testJiraConnection() {
   const creds = getJiraCredentials();
-  
+
   if (!creds) {
     return { success: false, message: 'No credentials configured. Run Setup > Configure JIRA Credentials first.' };
   }
-  
+
   try {
     const url = `${creds.baseUrl}/rest/api/3/myself`;
     const response = UrlFetchApp.fetch(url, {
@@ -406,9 +406,9 @@ function testJiraConnection() {
       },
       muteHttpExceptions: true
     });
-    
+
     const code = response.getResponseCode();
-    
+
     if (code === 200) {
       const user = JSON.parse(response.getContentText());
       return { success: true, message: `Connected as: ${user.displayName} (${user.emailAddress})` };
@@ -427,23 +427,23 @@ function testJiraConnection() {
  */
 function menuTestJiraConnection() {
   const ui = SpreadsheetApp.getUi();
-  
+
   if (!isJiraConfigured()) {
-    const response = ui.alert('Setup Required', 
-      'JIRA credentials not configured. Set them up now?', 
+    const response = ui.alert('Setup Required',
+      'JIRA credentials not configured. Set them up now?',
       ui.ButtonSet.YES_NO);
     if (response === ui.Button.YES) {
       showCredentialSetupDialog();
     }
     return;
   }
-  
+
   ui.alert('Testing...', 'Testing JIRA connection...', ui.ButtonSet.OK);
-  
+
   const result = testJiraConnection();
   ui.alert(
-    result.success ? '✓ Connection Successful' : '✗ Connection Failed', 
-    result.message, 
+    result.success ? '✓ Connection Successful' : '✗ Connection Failed',
+    result.message,
     ui.ButtonSet.OK
   );
 }
@@ -460,31 +460,31 @@ function getOrCreateReportLogSheet() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheetName = 'Report Log';
   let logSheet = spreadsheet.getSheetByName(sheetName);
-  
+
   if (!logSheet) {
     logSheet = spreadsheet.insertSheet(sheetName);
-    
+
     // Setup headers
     const headers = [
-      'Generated Date', 'PI', 'Value Stream', 
-      'Report Name', 'Spreadsheet URL', 'Spreadsheet ID', 
+      'Generated Date', 'PI', 'Value Stream',
+      'Report Name', 'Spreadsheet URL', 'Spreadsheet ID',
       'Epic Count', 'Status'
     ];
-    
+
     logSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     logSheet.getRange(1, 1, 1, headers.length)
       .setFontWeight('bold')
       .setBackground('#9b7bb8')
       .setFontColor('#ffffff')
       .setHorizontalAlignment('center');
-    
+
     // Set column widths
     const widths = [150, 60, 120, 250, 350, 200, 80, 100];
     widths.forEach((w, i) => logSheet.setColumnWidth(i + 1, w));
-    
+
     logSheet.setFrozenRows(1);
   }
-  
+
   return logSheet;
 }
 
@@ -495,7 +495,7 @@ function getOrCreateReportLogSheet() {
 function logReport(reportInfo) {
   const logSheet = getOrCreateReportLogSheet();
   const lastRow = Math.max(logSheet.getLastRow(), 1);
-  
+
   const logData = [
     new Date().toLocaleString(),
     reportInfo.piNumber ? `PI ${reportInfo.piNumber}` : reportInfo.pi || '',
@@ -506,16 +506,16 @@ function logReport(reportInfo) {
     reportInfo.epicCount || 0,
     reportInfo.status || 'Success'
   ];
-  
+
   logSheet.getRange(lastRow + 1, 1, 1, logData.length).setValues([logData]);
-  
+
   // Make URL clickable
   if (reportInfo.spreadsheetUrl) {
     const urlCell = logSheet.getRange(lastRow + 1, 5);
     urlCell.setFormula(`=HYPERLINK("${reportInfo.spreadsheetUrl}", "Open Report")`);
     urlCell.setFontColor('#6B3FA0');
   }
-  
+
   console.log('📝 Report logged:', reportInfo.reportName);
 }
 
@@ -534,12 +534,12 @@ function openReportFromLog() {
   const ui = SpreadsheetApp.getUi();
   const logSheet = getOrCreateReportLogSheet();
   const data = logSheet.getDataRange().getValues();
-  
+
   if (data.length <= 1) {
     ui.alert('No Reports', 'No reports have been generated yet.', ui.ButtonSet.OK);
     return;
   }
-  
+
   // Build list of recent reports (last 10)
   const recentReports = [];
   for (let i = Math.min(data.length - 1, 11); i >= 1; i--) {
@@ -553,32 +553,32 @@ function openReportFromLog() {
       });
     }
   }
-  
+
   if (recentReports.length === 0) {
     ui.alert('No Reports', 'No reports with valid URLs found.', ui.ButtonSet.OK);
     return;
   }
-  
+
   // Show selection dialog
   const reportList = recentReports.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
   const response = ui.prompt('Open Report',
     `Enter the number of the report to open:\n\n${reportList}`,
     ui.ButtonSet.OK_CANCEL);
-  
+
   if (response.getSelectedButton() !== ui.Button.OK) return;
-  
+
   const selection = parseInt(response.getResponseText()) - 1;
   if (isNaN(selection) || selection < 0 || selection >= recentReports.length) {
     ui.alert('Invalid Selection', 'Please enter a valid number.', ui.ButtonSet.OK);
     return;
   }
-  
+
   const selectedReport = recentReports[selection];
-  
+
   // Open the report in a new tab
   const html = HtmlService.createHtmlOutput(
     `<script>window.open("${selectedReport.url}", "_blank"); google.script.host.close();</script>`
   ).setWidth(1).setHeight(1);
-  
+
   ui.showModalDialog(html, 'Opening Report...');
 }
