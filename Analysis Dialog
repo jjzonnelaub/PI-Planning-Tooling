@@ -15,26 +15,26 @@
         --gray-light: #F5F5F5;
         --blue-accent: #4285F4;
       }
-      
+
       * { box-sizing: border-box; }
-      
-      body { 
-        font-family: 'Roboto', sans-serif; 
-        background-color: var(--gray-light); 
-        padding: 20px; 
+
+      body {
+        font-family: 'Roboto', sans-serif;
+        background-color: var(--gray-light);
+        padding: 20px;
         margin: 0;
       }
       .container { max-width: 520px; margin: 0 auto; }
-      
-      h3 { 
-        font-weight: 500; 
-        color: var(--navy-blue); 
-        margin-bottom: 16px; 
+
+      h3 {
+        font-weight: 500;
+        color: var(--navy-blue);
+        margin-bottom: 16px;
         border-bottom: 3px solid var(--gold-yellow);
         padding-bottom: 10px;
         font-size: 18px;
       }
-      
+
       /* -- Section Headers -- */
       .section-header {
         font-weight: 500;
@@ -49,32 +49,32 @@
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
-      
+
       /* -- Form Controls -- */
       .form-group { margin-bottom: 4px; }
-      
-      label.field-label { 
-        display: block; 
-        font-weight: 500; 
-        margin-bottom: 6px; 
+
+      label.field-label {
+        display: block;
+        font-weight: 500;
+        margin-bottom: 6px;
         color: var(--navy-blue);
         font-size: 13px;
       }
-      
-      select, input[type="text"], input[type="url"] { 
-        width: 100%; 
-        padding: 10px; 
-        border: 1px solid #ccc; 
-        border-radius: 4px; 
+
+      select, input[type="text"], input[type="url"] {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
         font-size: 14px;
         font-family: 'Roboto', sans-serif;
       }
-      select:focus, input:focus { 
-        outline: none; 
-        border-color: var(--purple-dark); 
+      select:focus, input:focus {
+        outline: none;
+        border-color: var(--purple-dark);
         box-shadow: 0 0 0 2px var(--purple-light);
       }
-      
+
       /* -- Checkbox Group (Value Streams) -- */
       .checkbox-group {
         border: 1px solid #ddd;
@@ -89,10 +89,10 @@
         font-size: 13px;
       }
       .select-all-bar label { cursor: pointer; font-weight: 500; color: var(--purple-dark); }
-      .select-all-bar input[type="checkbox"] { 
+      .select-all-bar input[type="checkbox"] {
         margin-right: 8px; width: 16px; height: 16px; accent-color: var(--purple-dark); vertical-align: middle;
       }
-      
+
       .checkbox-list {
         max-height: 170px;
         overflow-y: auto;
@@ -103,16 +103,16 @@
         transition: background 0.15s;
       }
       .checkbox-item:hover { background: #f8f6fd; }
-      .checkbox-item label { 
+      .checkbox-item label {
         cursor: pointer; display: flex; align-items: center; font-size: 14px; color: #333;
       }
-      .checkbox-item input[type="checkbox"] { 
+      .checkbox-item input[type="checkbox"] {
         margin-right: 10px; width: 16px; height: 16px; accent-color: var(--purple-dark); flex-shrink: 0;
       }
-      .vs-count { 
-        font-size: 11px; color: var(--gray-dark); margin-left: auto; font-style: italic; 
+      .vs-count {
+        font-size: 11px; color: var(--gray-dark); margin-left: auto; font-style: italic;
       }
-      
+
       /* -- Radio Cards -- */
       .radio-cards { display: flex; flex-direction: column; gap: 6px; }
       .radio-card {
@@ -125,17 +125,17 @@
         background: white;
       }
       .radio-card:hover { background: #f8f6fd; border-color: var(--purple-dark); }
-      .radio-card.selected { 
-        background: var(--purple-light); 
+      .radio-card.selected {
+        background: var(--purple-light);
         border-color: var(--purple-dark);
       }
-      .radio-card input[type="radio"] { 
+      .radio-card input[type="radio"] {
         margin-right: 10px; accent-color: var(--purple-dark); flex-shrink: 0;
       }
       .radio-card .card-content { flex: 1; }
       .radio-card .card-title { font-size: 14px; font-weight: 500; color: #333; }
       .radio-card .card-desc { font-size: 11px; color: var(--gray-dark); margin-top: 2px; }
-      
+
       /* -- Collapsible Destination Section -- */
       .destination-section { margin-top: 4px; }
       .destination-toggle {
@@ -159,7 +159,7 @@
       .destination-toggle .chevron.open { transform: rotate(180deg); }
       .destination-body { overflow: hidden; transition: max-height 0.25s ease; }
       .destination-body.collapsed { max-height: 0 !important; }
-      
+
       /* -- Saved Reports Sub-section -- */
       .sub-section {
         margin-top: 10px;
@@ -171,7 +171,7 @@
       .sub-section.hidden { display: none; }
       .sub-section label.field-label { margin-bottom: 4px; }
       .sub-section select { margin-top: 4px; }
-      
+
       .save-option {
         margin-top: 10px;
         padding: 8px;
@@ -179,39 +179,39 @@
         border-radius: 4px;
       }
       .save-option.hidden { display: none; }
-      .save-option label { 
+      .save-option label {
         display: flex; align-items: center; font-size: 13px; cursor: pointer;
       }
       .save-option input[type="checkbox"] { margin-right: 8px; }
-      
+
       .label-input { margin-top: 8px; }
       .label-input.hidden { display: none; }
       .label-input input { margin-top: 4px; }
-      
+
       .manage-link {
         display: inline-block; margin-top: 8px;
         font-size: 12px; color: var(--purple-dark);
         cursor: pointer; text-decoration: underline;
       }
       .manage-link:hover { color: var(--navy-blue); }
-      
+
       .help-text { font-size: 11px; color: var(--gray-dark); margin-top: 4px; }
-      
+
       /* -- Action Button -- */
       .action-bar {
         margin-top: 20px;
         padding-top: 16px;
         border-top: 2px solid var(--gold-yellow);
       }
-      
-      button.primary-btn { 
-        background-color: var(--navy-blue); 
-        color: white; 
-        padding: 14px 20px; 
-        border: none; 
-        border-radius: 4px; 
-        cursor: pointer; 
-        font-size: 16px; 
+
+      button.primary-btn {
+        background-color: var(--navy-blue);
+        color: white;
+        padding: 14px 20px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
         width: 100%;
         font-weight: 500;
         font-family: 'Roboto', sans-serif;
@@ -219,7 +219,7 @@
       }
       button.primary-btn:hover { background-color: #152a4a; }
       button.primary-btn:disabled { background-color: #aaa; cursor: not-allowed; }
-      
+
       button.secondary-btn {
         background: var(--gray-light); color: var(--gray-dark);
         border: 1px solid #ccc; padding: 8px 16px; border-radius: 4px;
@@ -227,12 +227,12 @@
         width: 100%; margin-top: 8px;
       }
       button.secondary-btn:hover { background: #e0e0e0; }
-      
+
       /* -- Status -- */
-      #status { 
-        margin-top: 12px; 
-        color: var(--gray-dark); 
-        text-align: center; 
+      #status {
+        margin-top: 12px;
+        color: var(--gray-dark);
+        text-align: center;
         padding: 10px;
         border-radius: 4px;
         font-size: 13px;
@@ -241,7 +241,7 @@
       #status.error { background: var(--red-light); color: #c62828; }
       #status.success { background: var(--green-light); color: #2e7d32; }
       #status.processing { background: #e3f2fd; color: var(--blue-accent); }
-      
+
       .open-report-btn {
         display: inline-block;
         padding: 10px 20px;
@@ -256,7 +256,7 @@
       .open-report-btn:hover {
         background: var(--navy-blue);
       }
-      
+
       /* -- Modal -- */
       .modal-overlay {
         display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -278,8 +278,8 @@
       .saved-report-item .report-label { font-size: 13px; }
       .saved-report-item .report-date { font-size: 11px; color: var(--gray-dark); }
       .no-saved-reports { color: var(--gray-dark); font-style: italic; text-align: center; padding: 20px; }
-      .btn-danger { 
-        background: #C62828; color: white; border: none; padding: 6px 12px; 
+      .btn-danger {
+        background: #C62828; color: white; border: none; padding: 6px 12px;
         border-radius: 4px; cursor: pointer; font-size: 12px;
       }
       .btn-danger:hover { background: #a31f1f; }
@@ -288,7 +288,7 @@
   <body>
     <div class="container">
       <h3>Analyze Program Increment</h3>
-      
+
       <!-- ============================================ -->
       <!-- PI Number                                   -->
       <!-- ============================================ -->
@@ -306,7 +306,7 @@
           <option value="20">PI 20</option>
         </select>
       </div>
-      
+
       <!-- ============================================ -->
       <!-- Value Streams (multi-select)                -->
       <!-- ============================================ -->
@@ -336,7 +336,7 @@
           </div>
         </div>
       </div>
-      
+
       <!-- ============================================ -->
       <!-- Summary Options                             -->
       <!-- ============================================ -->
@@ -357,7 +357,7 @@
           </div>
         </label>
       </div>
-      
+
       <!-- ============================================ -->
       <!-- Report Destination (collapsible)            -->
       <!-- ============================================ -->
@@ -387,7 +387,7 @@
               </div>
             </label>
           </div>
-          
+
           <!-- Saved Reports (shown when "Update Existing" selected) -->
           <div class="sub-section hidden" id="savedReportSection">
             <label class="field-label">Select Saved Report:</label>
@@ -395,20 +395,20 @@
               <option value="">Loading...</option>
             </select>
             <span class="manage-link" onclick="openManageModal()">Manage Saved Reports</span>
-            
+
             <!-- New URL input -->
             <div class="sub-section hidden" id="urlInputSection" style="border: none; padding: 8px 0 0 0;">
               <label class="field-label">Report URL:</label>
               <input type="url" id="existingReportUrl" placeholder="https://docs.google.com/spreadsheets/d/...">
               <div class="help-text">Paste the full URL of a previously generated report.</div>
-              
+
               <div class="save-option" id="saveCheckboxContainer">
                 <label>
                   <input type="checkbox" id="saveForFuture" checked onchange="toggleLabelInput()">
                   Save this report for future use
                 </label>
               </div>
-              
+
               <div class="label-input" id="labelInputContainer">
                 <label class="field-label">Report Label:</label>
                 <input type="text" id="reportLabel" placeholder="e.g., PI 15 - MMPM">
@@ -418,7 +418,7 @@
           </div>
         </div>
       </div>
-      
+
       <!-- ============================================ -->
       <!-- Action Buttons                              -->
       <!-- ============================================ -->
@@ -432,7 +432,7 @@
         <div id="status"></div>
       </div>
     </div>
-    
+
     <!-- ============================================ -->
     <!-- Manage Saved Reports Modal                  -->
     <!-- ============================================ -->
@@ -443,21 +443,21 @@
         <button class="secondary-btn" onclick="closeManageModal()" style="margin-top: 15px;">Close</button>
       </div>
     </div>
-    
+
     <script>
       var savedReports = [];
-      
+
       // -- Initialization --
       document.addEventListener('DOMContentLoaded', function() {
         loadSavedReports();
       });
-      
+
       // -- PI Change Handler --
       function onPIChange() {
         updateAutoLabel();
         updateButtonLabel();
       }
-      
+
       // -- Value Stream Select All --
       function toggleAllVS(checkbox) {
         document.querySelectorAll('.vs-checkbox').forEach(function(cb) {
@@ -466,18 +466,18 @@
         updateAutoLabel();
         updateButtonLabel();
       }
-      
+
       // Listen for individual VS checkbox changes
       document.querySelectorAll('.vs-checkbox').forEach(function(cb) {
         cb.addEventListener('change', function() {
-          var allChecked = document.querySelectorAll('.vs-checkbox').length === 
+          var allChecked = document.querySelectorAll('.vs-checkbox').length ===
                            document.querySelectorAll('.vs-checkbox:checked').length;
           document.getElementById('selectAllVS').checked = allChecked;
           updateAutoLabel();
           updateButtonLabel();
         });
       });
-      
+
       // -- Summary Option Cards --
       function selectSummaryOption(option) {
         document.querySelectorAll('[id^="summaryCard_"]').forEach(function(card) {
@@ -487,26 +487,26 @@
         document.querySelector('input[name="summaryOption"][value="' + option + '"]').checked = true;
         updateButtonLabel();
       }
-      
+
       // -- Destination Section (collapsible) --
       function toggleDestinationSection() {
         var body = document.getElementById('destBody');
         var chevron = document.getElementById('destChevron');
         body.classList.toggle('collapsed');
         chevron.classList.toggle('open');
-        
+
         if (!body.classList.contains('collapsed')) {
           body.style.maxHeight = body.scrollHeight + 300 + 'px';
         }
       }
-      
+
       function selectDestination(dest) {
         document.querySelectorAll('[id^="destCard_"]').forEach(function(card) {
           card.classList.remove('selected');
         });
         document.getElementById('destCard_' + dest).classList.add('selected');
         document.querySelector('input[name="reportDestination"][value="' + dest + '"]').checked = true;
-        
+
         var savedSection = document.getElementById('savedReportSection');
         if (dest === 'update') {
           savedSection.classList.remove('hidden');
@@ -515,35 +515,35 @@
           savedSection.classList.add('hidden');
           document.getElementById('urlInputSection').classList.add('hidden');
         }
-        
+
         // Re-calc max-height
         var body = document.getElementById('destBody');
         if (!body.classList.contains('collapsed')) {
           setTimeout(function() { body.style.maxHeight = body.scrollHeight + 'px'; }, 50);
         }
-        
+
         updateButtonLabel();
       }
-      
+
       // -- Dynamic Button Label --
       function updateButtonLabel() {
         var btn = document.getElementById('runButton');
         var summaryOption = document.querySelector('input[name="summaryOption"]:checked').value;
         var dest = document.querySelector('input[name="reportDestination"]:checked').value;
-        
+
         var label = 'Run ';
         label += (summaryOption === 'with') ? 'Full' : 'Fast';
         label += ' Analysis';
-        
+
         if (dest === 'new') {
           label += ' \u2192 New Report';
         } else if (dest === 'update') {
           label += ' \u2192 Update Report';
         }
-        
+
         btn.textContent = label;
       }
-      
+
       // -- Saved Reports --
       function loadSavedReports() {
         google.script.run
@@ -558,22 +558,22 @@
           })
           .getSavedReports();
       }
-      
+
       function populateSavedReportsDropdown() {
         var select = document.getElementById('savedReportSelect');
         select.innerHTML = '';
-        
+
         var newUrlOption = document.createElement('option');
         newUrlOption.value = '__new__';
         newUrlOption.textContent = '+ Enter new URL...';
         select.appendChild(newUrlOption);
-        
+
         if (savedReports.length > 0) {
           var separator = document.createElement('option');
           separator.disabled = true;
           separator.textContent = '--------------------';
           select.appendChild(separator);
-          
+
           savedReports.forEach(function(report) {
             var option = document.createElement('option');
             option.value = report.url;
@@ -583,12 +583,12 @@
           });
         }
       }
-      
+
       function onSavedReportChange() {
         var select = document.getElementById('savedReportSelect');
         var urlSection = document.getElementById('urlInputSection');
         var urlInput = document.getElementById('existingReportUrl');
-        
+
         if (select.value === '__new__') {
           urlSection.classList.remove('hidden');
           document.getElementById('saveForFuture').checked = true;
@@ -601,14 +601,14 @@
         } else {
           urlSection.classList.add('hidden');
         }
-        
+
         // Re-calc max-height
         var body = document.getElementById('destBody');
         if (!body.classList.contains('collapsed')) {
           setTimeout(function() { body.style.maxHeight = body.scrollHeight + 'px'; }, 50);
         }
       }
-      
+
       function toggleLabelInput() {
         var saveChecked = document.getElementById('saveForFuture').checked;
         var labelContainer = document.getElementById('labelInputContainer');
@@ -619,12 +619,12 @@
           labelContainer.classList.add('hidden');
         }
       }
-      
+
       function updateAutoLabel() {
         var piNumber = document.getElementById('piNumber').value;
         var selectedVS = Array.from(document.querySelectorAll('.vs-checkbox:checked')).map(function(cb) { return cb.value; });
         var labelInput = document.getElementById('reportLabel');
-        
+
         var parts = [];
         if (piNumber) parts.push('PI ' + piNumber);
         if (selectedVS.length > 0 && selectedVS.length <= 3) {
@@ -632,15 +632,15 @@
         } else if (selectedVS.length > 3) {
           parts.push(selectedVS.length + ' Value Streams');
         }
-        
+
         labelInput.value = parts.join(' - ');
       }
-      
+
       // -- Manage Modal --
       function openManageModal() {
         var modal = document.getElementById('manageModal');
         var list = document.getElementById('savedReportsList');
-        
+
         if (savedReports.length === 0) {
           list.innerHTML = '<div class="no-saved-reports">No saved reports yet.</div>';
         } else {
@@ -655,17 +655,17 @@
             '</div>';
           }).join('');
         }
-        
+
         modal.classList.add('show');
       }
-      
+
       function closeManageModal() {
         document.getElementById('manageModal').classList.remove('show');
       }
-      
+
       function deleteSavedReport(url) {
         if (!confirm('Delete this saved report?')) return;
-        
+
         google.script.run
           .withSuccessHandler(function() {
             loadSavedReports();
@@ -676,24 +676,24 @@
           })
           .deleteSavedReport(url);
       }
-      
+
       function escapeHtml(text) {
         var div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
       }
-      
+
       // =============================================
       // MAIN ACTION: Run Analysis
       // =============================================
       function runAnalysis() {
         var button = document.getElementById('runButton');
         var status = document.getElementById('status');
-        
+
         // Reset status
         status.innerText = '';
         status.className = '';
-        
+
         // -- Validate --
         var piNumber = document.getElementById('piNumber').value;
         if (!piNumber) {
@@ -701,25 +701,25 @@
           status.className = 'error';
           return;
         }
-        
+
         var selectedVS = Array.from(document.querySelectorAll('.vs-checkbox:checked')).map(function(cb) { return cb.value; });
         if (selectedVS.length === 0) {
           status.innerText = 'Please select at least one value stream.';
           status.className = 'error';
           return;
         }
-        
+
         var summaryOption = document.querySelector('input[name="summaryOption"]:checked').value;
         var reportDestination = document.querySelector('input[name="reportDestination"]:checked').value;
-        
+
         // Get URL based on selection
         var existingReportUrl = '';
         var saveForFuture = false;
         var reportLabel = '';
-        
+
         if (reportDestination === 'update') {
           var savedReportSelect = document.getElementById('savedReportSelect');
-          
+
           if (savedReportSelect.value === '__new__') {
             existingReportUrl = document.getElementById('existingReportUrl').value.trim();
             saveForFuture = document.getElementById('saveForFuture').checked;
@@ -727,32 +727,32 @@
           } else {
             existingReportUrl = savedReportSelect.value;
           }
-          
+
           if (!existingReportUrl) {
             status.innerText = 'Please select a saved report or enter a URL.';
             status.className = 'error';
             return;
           }
-          
+
           var urlPattern = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9_-]+/;
           if (!urlPattern.test(existingReportUrl)) {
             status.innerText = 'Invalid Google Sheets URL format.';
             status.className = 'error';
             return;
           }
-          
+
           if (saveForFuture && !reportLabel) {
             status.innerText = 'Please enter a label for the saved report.';
             status.className = 'error';
             return;
           }
         }
-        
+
         // -- Disable UI & show processing --
         button.disabled = true;
         status.innerHTML = '\u23F3 Running PI ' + piNumber + ' analysis for ' + selectedVS.join(', ') + '...';
         status.className = 'processing';
-        
+
         // -- Save report if requested --
         if (saveForFuture && existingReportUrl && reportLabel) {
           google.script.run
@@ -760,7 +760,7 @@
             .withFailureHandler(function(error) { console.error('Error saving report:', error); })
             .saveReport(reportLabel, existingReportUrl);
         }
-        
+
         // -- Call backend --
         google.script.run
           .withSuccessHandler(function(result) {
@@ -770,18 +770,18 @@
             } catch (e) {
               // Not JSON, just a string message
             }
-            
+
             if (parsed && parsed.reportUrl) {
               // Show success with clickable button
               var summaryInfo = '';
               if (parsed.summaryResults) {
-                summaryInfo = '<br><small>Generated: ' + 
+                summaryInfo = '<br><small>Generated: ' +
                   parsed.summaryResults.teamSummaries + ' team summaries, ' +
                   parsed.summaryResults.initiativeAnalysis + ' initiative tabs' +
                   (parsed.summaryResults.dansReport ? ", Dan's Report" : '') +
                   '</small>';
               }
-              
+
               status.innerHTML = '\u2705 ' + (parsed.message ? parsed.message.split('\n')[0] : 'Report created!') +
                 summaryInfo +
                 '<br><br>' +

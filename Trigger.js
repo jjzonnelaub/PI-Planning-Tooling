@@ -2,11 +2,11 @@
  * ========================================
  * TRIGGER FILE - 15 MINUTE UPDATES
  * ========================================
- * 
+ *
  * This trigger runs every 15 minutes and uses smart caching:
  * - Refreshes from JIRA at :00 and :30 (twice per hour)
  * - Uses cache at :15 and :45 (fast, no API calls)
- * 
+ *
  * Setup Instructions:
  * 1. Copy all functions below to your trigger.gs file
  * 2. In Apps Script, go to Triggers (clock icon)
@@ -26,21 +26,21 @@ function hourlyUpdate() {
   const PI_NUMBER = '13';  // Update this to your current PI
   const VALUE_STREAMS = [
     'AIMM',
-    'EMA Clinical', 
+    'EMA Clinical',
     'EMA RAC',
     'MMPM',
     'RCM'
   ];
-  
+
   // ===== EXECUTION =====
   try {
     const now = new Date();
     const timeStr = now.toLocaleTimeString();
     const minutes = now.getMinutes();
-    
+
     console.log(`🕐 Starting 15-minute update for PI ${PI_NUMBER} at ${timeStr}...`);
     console.log(`Updating value streams: ${VALUE_STREAMS.join(', ')}`);
-    
+
     // Determine if this is a refresh cycle
     const isRefreshCycle = (minutes === 0 || minutes === 30);
     if (isRefreshCycle) {
@@ -48,30 +48,30 @@ function hourlyUpdate() {
     } else {
       console.log('⚡ Cache cycle - will use cached data if available');
     }
-    
+
     // Enable trigger-safe mode
     setupTriggerSafeMode();
-    
+
     // Track execution time
     const startTime = new Date();
-    
+
     // Call the main analysis function
     analyzeSelectedValueStreams(PI_NUMBER, VALUE_STREAMS);
-    
+
     // Calculate duration
     const duration = ((new Date() - startTime) / 1000).toFixed(1);
-    
+
     console.log('========================================');
     console.log(`✅ Update completed successfully in ${duration}s`);
     console.log(`Completed at: ${new Date().toLocaleTimeString()}`);
     console.log('========================================');
-    
+
   } catch (error) {
     console.error('========================================');
     console.error('❌ ERROR in 15-minute update:', error);
     console.error('Stack trace:', error.stack);
     console.error('========================================');
-    
+
     // Send email notification on failure
     sendErrorEmail(error);
   }
@@ -86,23 +86,23 @@ function setupTriggerSafeMode() {
   globalThis.showProgress = function(message) {
     console.log('[PROGRESS]', message);
   };
-  
-  // Override the global closeProgress function  
+
+  // Override the global closeProgress function
   globalThis.closeProgress = function() {
     console.log('[PROGRESS] Complete');
   };
-  
+
   // Create a mock UI object for SpreadsheetApp.getUi()
   const mockUi = {
     alert: function(title, message, buttons) {
       console.log('[UI ALERT]', title);
       if (message) console.log('[UI ALERT]', message);
-      
+
       // Smart cache decision based on time
       if (title.includes('Cache Option')) {
         const now = new Date();
         const minutes = now.getMinutes();
-        
+
         // ⭐ OPTION A: Refresh at :00 and :30 (twice per hour)
         if (minutes === 0 || minutes === 30) {
           console.log('🔄 Refresh window - forcing fresh JIRA data');
@@ -112,19 +112,19 @@ function setupTriggerSafeMode() {
           return mockUi.Button.YES; // YES = use cache
         }
       }
-      
+
       // For other alerts, return OK
       return mockUi.Button.OK;
     },
     Button: { NO: 'NO', YES: 'YES', OK: 'OK' },
     ButtonSet: { YES_NO: 'YES_NO', OK: 'OK' }
   };
-  
+
   // Override SpreadsheetApp.getUi()
   SpreadsheetApp.getUi = function() {
     return mockUi;
   };
-  
+
   console.log('✅ Trigger-safe mode enabled (Option A: refresh at :00 and :30)');
 }
 
@@ -156,7 +156,7 @@ Extensions > Apps Script > Executions
 
 ---
 This is an automated notification from your JIRA PI Planning Dashboard.`;
-    
+
     MailApp.sendEmail(userEmail, subject, body);
     console.log(`✅ Error notification sent to ${userEmail}`);
   } catch (emailError) {
@@ -174,7 +174,7 @@ function sendSuccessEmail(piNumber, valueStreams, duration, usedCache) {
     const userEmail = Session.getEffectiveUser().getEmail();
     const subject = `JIRA Dashboard - PI ${piNumber} Update Complete`;
     const cacheStatus = usedCache ? 'Used cached data (fast)' : 'Fetched fresh data from JIRA';
-    
+
     const body = `The 15-minute JIRA integration update completed successfully.
 
 PI: ${piNumber}
@@ -187,7 +187,7 @@ Your dashboard has been updated with the latest data.
 
 ---
 This is an automated notification from your JIRA PI Planning Dashboard.`;
-    
+
     MailApp.sendEmail(userEmail, subject, body);
     console.log(`✅ Success notification sent to ${userEmail}`);
   } catch (emailError) {
@@ -208,9 +208,9 @@ function testFifteenMinuteUpdate() {
   console.log('=== MANUAL TEST RUN ===');
   console.log('This simulates the trigger execution without consuming trigger quota');
   console.log('');
-  
+
   hourlyUpdate();
-  
+
   console.log('');
   console.log('=== TEST COMPLETE ===');
   console.log('Check the logs above for any errors');
@@ -223,7 +223,7 @@ function testFifteenMinuteUpdate() {
 function showCacheSchedule() {
   const now = new Date();
   const currentMinute = now.getMinutes();
-  
+
   console.log('========================================');
   console.log('CACHE SCHEDULE (Option A)');
   console.log('========================================');
@@ -238,7 +238,7 @@ function showCacheSchedule() {
   console.log('  - XX:15 - 15 minutes past');
   console.log('  - XX:45 - 45 minutes past');
   console.log('');
-  
+
   if (currentMinute === 0 || currentMinute === 30) {
     console.log('🔄 Current status: REFRESH WINDOW');
     console.log('Next run will fetch fresh data from JIRA');
@@ -246,7 +246,7 @@ function showCacheSchedule() {
     console.log('⚡ Current status: CACHE WINDOW');
     console.log('Next run will use cached data');
   }
-  
+
   console.log('========================================');
 }
 
@@ -256,9 +256,9 @@ function showCacheSchedule() {
 function forceClearCache() {
   try {
     const piNumber = '13'; // Update this to match your PI
-    
+
     console.log('Clearing cache for PI', piNumber);
-    
+
     if (typeof CacheManager !== 'undefined' && CacheManager.isEnabled()) {
       CacheManager.clearPI(piNumber);
       console.log('✅ Cache cleared successfully');
@@ -276,11 +276,11 @@ function forceClearCache() {
  */
 function listActiveTriggers() {
   const triggers = ScriptApp.getProjectTriggers();
-  
+
   console.log('========================================');
   console.log(`ACTIVE TRIGGERS (${triggers.length} total)`);
   console.log('========================================');
-  
+
   if (triggers.length === 0) {
     console.log('No triggers found!');
     console.log('You need to create a trigger in the Apps Script UI:');
@@ -295,18 +295,18 @@ function listActiveTriggers() {
       console.log(`\nTrigger ${index + 1}:`);
       console.log('  Function:', trigger.getHandlerFunction());
       console.log('  Event Type:', trigger.getEventType());
-      
+
       try {
         const triggerSource = trigger.getTriggerSource();
         console.log('  Source:', triggerSource);
       } catch (e) {
         // Some triggers don't have a source
       }
-      
+
       console.log('  Trigger ID:', trigger.getUniqueId());
     });
   }
-  
+
   console.log('========================================');
 }
 
@@ -315,15 +315,15 @@ function listActiveTriggers() {
  */
 function deleteAllTriggers() {
   const triggers = ScriptApp.getProjectTriggers();
-  
+
   console.log(`Found ${triggers.length} triggers to delete`);
-  
+
   triggers.forEach(trigger => {
     const functionName = trigger.getHandlerFunction();
     console.log(`Deleting trigger for function: ${functionName}`);
     ScriptApp.deleteTrigger(trigger);
   });
-  
+
   console.log('✅ All triggers deleted');
   console.log('You will need to recreate your 15-minute trigger manually');
 }

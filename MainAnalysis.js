@@ -13,54 +13,54 @@
 function generateSummaryForValueStream(piNumber, valueStream) {
   const ui = SpreadsheetApp.getUi();
   const programIncrement = `PI ${piNumber}`;
-  
+
   try {
     showProgress(`Generating summary for ${valueStream} in ${programIncrement}...`);
-    
+
     // Check if PI data sheet exists
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     const piSheetName = `PI ${piNumber}`;
     const piSheet = spreadsheet.getSheetByName(piSheetName);
-    
+
     if (!piSheet) {
       closeProgress();
       ui.alert(`No data found for ${programIncrement}. Please run the analysis first.`);
       return;
     }
-    
+
     // Read data from PI sheet
     showProgress('Reading PI data...');
     const dataRange = piSheet.getDataRange();
     const values = dataRange.getValues();
     const headers = values[3]; // Headers on row 4
-    
+
     const allIssues = parsePISheetData(values, headers);
-    
+
     // Filter for the selected value stream
-    const vsIssues = allIssues.filter(issue => 
+    const vsIssues = allIssues.filter(issue =>
       issue.analyzedValueStream === valueStream || issue.valueStream === valueStream
     );
-    
+
     if (vsIssues.length === 0) {
       closeProgress();
       ui.alert(`No data found for ${valueStream} in ${programIncrement}.`);
       return;
     }
-    
+
     // Create summary sheet
     showProgress('Creating summary sheet...');
     const summarySheetName = `${programIncrement} - ${valueStream} Summary`;
     createValueStreamSummary(summarySheetName, vsIssues, programIncrement, valueStream);
-    
+
     closeProgress();
-    
+
     ui.alert(
       'Summary Complete',
       `Successfully generated summary for ${valueStream} in ${programIncrement}.\n\n` +
       `Sheet: "${summarySheetName}"`,
       ui.ButtonSet.OK
     );
-    
+
   } catch (error) {
     console.error('Error generating summary:', error);
     closeProgress();
@@ -79,21 +79,21 @@ function generateSummaryForValueStream(piNumber, valueStream) {
  */
 function processEpicData(epic, analyzedValueStream) {
   const fields = epic.fields;
-  
+
   // Extract momentum label if present
   let momentum = '';
   if (fields.labels && Array.isArray(fields.labels)) {
-    const momentumLabel = fields.labels.find(label => 
+    const momentumLabel = fields.labels.find(label =>
       label.toLowerCase().startsWith('momentum')
     );
     if (momentumLabel) {
       momentum = momentumLabel;
     }
   }
-    
+
   // Calculate LOE (sum of story points from children will be added later)
   let loeEstimate = 0;
-  
+
   return {
     key: epic.key,
     issueType: 'Epic',
@@ -113,7 +113,7 @@ function processEpicData(epic, analyzedValueStream) {
     components: (fields.components || []).map(c => c.name).join(', '),
     costOfDelay: fields.customfield_10065 || '',
     costOfDelay: parseFloat(fields.customfield_10065) || 0,
-    dependsOnTeam: fields.customfield_10120 || '', 
+    dependsOnTeam: fields.customfield_10120 || '',
     momentum: momentum
   };
 }
@@ -127,18 +127,18 @@ function processEpicData(epic, analyzedValueStream) {
  */
 function processChildData(child, epicKey, analyzedValueStream) {
   const fields = child.fields;
-  
+
   // Extract momentum label if present (though less common on child issues)
     let momentum = '';
     if (fields.labels && Array.isArray(fields.labels)) {
-      const momentumLabel = fields.labels.find(label => 
+      const momentumLabel = fields.labels.find(label =>
         label.toLowerCase().startsWith('momentum')
       );
       if (momentumLabel) {
         momentum = momentumLabel;
       }
     }
-  
+
   return {
     key: child.key,
     issueType: fields.issuetype?.name || '',
@@ -158,7 +158,7 @@ function processChildData(child, epicKey, analyzedValueStream) {
         components: (fields.components || []).map(c => c.name).join(', '),
     costOfDelay: 0,  // Children don't have CoD,
     dependsOnTeam: fields.customfield_10120 || '',
-    momentum: momentum  
+    momentum: momentum
   };
 }
 
@@ -173,13 +173,13 @@ function processChildData(child, epicKey, analyzedValueStream) {
 function createPIAnalysisSheet(sheetName, issues, analyzedValueStreams) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = spreadsheet.getSheetByName(sheetName);
-  
+
   if (sheet) {
     sheet.clear();
   } else {
     sheet = spreadsheet.insertSheet(sheetName);
   }
-  
+
   const headers = [
     'Key',
     'Issue Type',
@@ -197,36 +197,36 @@ function createPIAnalysisSheet(sheetName, issues, analyzedValueStreams) {
     'Program Increment',
     'PI Commitment',
     'Components',
-    'Cost of Delay', 
+    'Cost of Delay',
     'Momentum',
     'Depends on Valuestream',
     'Depends on Team'
   ];
-  
+
   sheet.getRange(1, 1).setValue(`PI Analysis - ${sheetName}`);
   sheet.getRange(1, 1).setFontSize(16).setFontWeight('bold');
-  
+
   sheet.getRange(2, 1).setValue('Last Updated:');
   sheet.getRange(2, 2).setValue(new Date().toLocaleString());
   sheet.getRange(2, 1, 1, 2).setFontWeight('bold');
-  
+
   sheet.getRange(3, 1).setValue('Analyzed Value Streams:');
   sheet.getRange(3, 2).setValue(analyzedValueStreams.join(', '));
   sheet.getRange(3, 1, 1, 2).setFontWeight('bold');
-  
+
   sheet.getRange(4, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(4, 1, 1, headers.length)
     .setFontWeight('bold')
     .setBackground('#4285f4')
     .setFontColor('white');
-  
+
   const epicLOE = calculateEpicLOE(issues);
-  
+
   const data = issues.map(issue => {
     if (issue.issueType === 'Epic' && epicLOE[issue.key]) {
       issue.loeEstimate = epicLOE[issue.key];
     }
-    
+
     return [
       issue.key,
       issue.issueType,
@@ -250,18 +250,18 @@ function createPIAnalysisSheet(sheetName, issues, analyzedValueStreams) {
       issue.dependsOnTeam || ''
     ];
   });
-  
+
   if (data.length > 0) {
     sheet.getRange(5, 1, data.length, headers.length).setValues(data);
-    
+
     const keys = data.map(row => row[0]);
     applyJiraHyperlinks(sheet, 5, 1, keys);
   }
-  
+
   sheet.setFrozenRows(4);
   sheet.setFrozenColumns(1);
   sheet.autoResizeColumns(1, headers.length);
-  
+
   sheet.setColumnWidth(3, 400);
   sheet.getRange(5, 3, data.length, 1).setWrap(true);
 }
@@ -276,32 +276,32 @@ function createPIAnalysisSheet(sheetName, issues, analyzedValueStreams) {
 function createValueStreamSummary(sheetName, issues, programIncrement, valueStream) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = spreadsheet.getSheetByName(sheetName);
-  
+
   if (sheet) {
     sheet.clear();
   } else {
     sheet = spreadsheet.insertSheet(sheetName);
   }
-  
+
   // Separate epics and stories
   const epics = issues.filter(i => i.issueType === 'Epic');
   const stories = issues.filter(i => i.issueType !== 'Epic');
-  
+
   // Set up summary header
   sheet.getRange(1, 1).setValue(`${programIncrement} - ${valueStream} Summary`);
   sheet.getRange(1, 1).setFontSize(16).setFontWeight('bold');
-  
+
   sheet.getRange(2, 1).setValue('Last Updated:');
   sheet.getRange(2, 2).setValue(new Date().toLocaleString());
   sheet.getRange(2, 1, 1, 2).setFontWeight('bold');
-  
+
   let currentRow = 4;
-  
+
   // Summary metrics
   sheet.getRange(currentRow, 1).setValue('Summary Metrics');
   sheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#e8f0fe');
   currentRow += 2;
-  
+
   const metrics = [
     ['Total Epics', epics.length],
     ['Total Stories/Tasks', stories.length],
@@ -309,33 +309,33 @@ function createValueStreamSummary(sheetName, issues, programIncrement, valueStre
     ['Total Story Point Estimates', epics.reduce((sum, e) => sum + (e.storyPointEstimate || 0), 0)],
     ['Total Feature Points (x10)', epics.reduce((sum, e) => sum + ((e.featurePoints || 0) * 10), 0)]
   ];
-  
+
   metrics.forEach(metric => {
     sheet.getRange(currentRow, 1).setValue(metric[0]);
     sheet.getRange(currentRow, 2).setValue(metric[1]);
     currentRow++;
   });
-  
+
   currentRow += 2;
-  
+
   // Epics section
   sheet.getRange(currentRow, 1).setValue('Epics');
   sheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#e8f0fe');
   currentRow += 2;
-  
+
   if (epics.length > 0) {
     const epicHeaders = [
       'Key', 'Summary', 'Status', 'Scrum Team', 'Allocation',
       'Story Point Estimate', 'LOE Estimate', 'Feature Points (x10)'
     ];
-    
+
     sheet.getRange(currentRow, 1, 1, epicHeaders.length).setValues([epicHeaders]);
     sheet.getRange(currentRow, 1, 1, epicHeaders.length)
       .setFontWeight('bold')
       .setBackground('#4285f4')
       .setFontColor('white');
     currentRow++;
-    
+
     const epicData = epics.map(epic => [
       epic.key,
       epic.summary.substring(0, 60) + (epic.summary.length > 60 ? '...' : ''),
@@ -346,16 +346,16 @@ function createValueStreamSummary(sheetName, issues, programIncrement, valueStre
       epic.loeEstimate || 0,
       (epic.featurePoints || 0) * 10
     ]);
-    
+
     sheet.getRange(currentRow, 1, epicData.length, epicHeaders.length).setValues(epicData);
-    
+
     // Apply hyperlinks
     const epicKeys = epics.map(e => e.key);
     applyJiraHyperlinks(sheet, currentRow, 1, epicKeys);
-    
+
     currentRow += epicData.length;
   }
-  
+
   // Format the sheet
   sheet.setFrozenRows(4);
   sheet.autoResizeColumns(1, 8);
@@ -371,12 +371,12 @@ function createValueStreamSummary(sheetName, issues, programIncrement, valueStre
  */
 function calculateEpicLOE(issues) {
   const epicLOE = {};
-  
+
   // Initialize all epics with 0 LOE
   issues.filter(i => i.issueType === 'Epic').forEach(epic => {
     epicLOE[epic.key] = 0;
   });
-  
+
   // Sum story points from children
   issues.filter(i => i.issueType !== 'Epic').forEach(child => {
     const epicKey = child.epicLink || child.parentKey;
@@ -384,6 +384,6 @@ function calculateEpicLOE(issues) {
       epicLOE[epicKey] += child.storyPoints || 0;
     }
   });
-  
+
   return epicLOE;
 }
