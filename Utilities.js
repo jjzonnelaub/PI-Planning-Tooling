@@ -1,426 +1,393 @@
-// ===== VALUE STREAM CONFIGURATION =====
-// Updated to match consolidated capacity planning format
-const VALUE_STREAM_CONFIG = {
-  'EMA Clinical': {
-    filter: null,
-    scrumTeams: [
-      'Alchemist',
-      'Avengers',
-      'Explorers',
-      'Eyefinity',
-      'Mandalore',
-      'Ordernauts',
-      'Painkillers',
-      'Artificially Intelligent',
-      'Patience',
-      'Embryonics',
-      'Vesties',
-      'Spice Runners',
-      'Pain Killers'
-    ]
-  },
-  'EMA RAC': {
-    filter: null,
-    alternateNames: ['EMA RaC'],
-    scrumTeams: ['Achievers', 'Borg', 'Cyborg']
-  },
-  'RCM Genie': {
-    filter: null,
-    alternateNames: ['RCM'],
-    scrumTeams: ['Claimbots', 'Frontliners', 'Integrators', 'Vajra']
-  },
-  'MMPM': {
-    filter: null,
-    scrumTeams: [
-      'Billionaires',
-      'Claimcraft',
-      'Lynx',
-      'Penny-Wise',
-      'Time-Keepers',
-      'Trailblazers',
-      'ClaimCraft',
-      'Kaizen'
-    ]
-  },
-  'Patient Collaboration': {
-    filter: null,
-    scrumTeams: [
-      'Agni',
-      'Apollo',
-      'Bheem',
-      'Jupiter',
-      'Rubber Ducks',
-      'Sudo',
-      'Vaayu',
-      'Voyagers'
-    ]
-  },
-  'AIMM': {
-    filter: {
-      scrumTeam: 'Artificially Intelligent',
-      valueStreams: ['EMA Clinical', 'EMA RAC', 'MMPM', 'Patient Collaboration']
-    },
-    scrumTeams: ['Artificially Intelligent']
-  }
-};
 
-function getExcludedTeamsForContext(issues, currentValueStream) {
-  if (!issues || !currentValueStream) {
-    console.log('No issues or value stream provided for exclusion check');
-    return [];
+/**
+ * Utility Functions - Helper functions for sheet manipulation, data parsing, and UI
+ * This file should be loaded after config.gs
+ */
+
+// ===== SHEET MANIPULATION UTILITIES =====
+
+/**
+ * Safely get or create a sheet
+ * @param {Spreadsheet} spreadsheet - The spreadsheet object
+ * @param {string} sheetName - Name of the sheet to get or create
+ * @return {Sheet} The sheet object
+ */
+function safeGetOrCreateSheet(spreadsheet, sheetName) {
+  let sheet = spreadsheet.getSheetByName(sheetName);
+  
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(sheetName);
   }
   
-  const normalizedCurrent = normalizeValueStreamName(currentValueStream);
-  console.log('\n=== Determining Excluded Teams for Context: ' + normalizedCurrent + ' ===');
-  
-  const teamIssues = {};
-  issues.forEach(issue => {
-    const team = issue.scrumTeam;
-    if (!team) return;
-    
-    if (!teamIssues[team]) {
-      teamIssues[team] = { dependencies: [], regularWork: [] };
+  return sheet;
+}
+
+/**
+ * Safely remove filter from a sheet
+ * @param {Sheet} sheet - The sheet to remove filter from
+ */
+function safeRemoveFilter(sheet) {
+  try {
+    const filter = sheet.getFilter();
+    if (filter) {
+      filter.remove();
     }
-    
-    if (issue.issueType === 'Dependency') {
-      teamIssues[team].dependencies.push(issue);
-    } else {
-      teamIssues[team].regularWork.push(issue);
+  } catch (e) {
+    // Filter might not exist or already be removed
+    console.log('No filter to remove or error removing filter:', e);
+  }
+}
+
+/**
+ * Create filter views for different sections of a summary sheet
+ * @param {Sheet} sheet - The sheet to create filter views for
+ * @param {Object} sectionRanges - Object containing section range information
+ */
+function createFilterViews(sheet, sectionRanges) {
+  // Note: Filter views require Advanced Sheets API
+  // This is a placeholder that creates basic filters instead
+  console.log('Filter view creation requires Advanced Sheets API');
+  
+  // As a fallback, we can set up the sheet for easy filtering
+  if (sectionRanges.loeSection) {
+    // Could add named ranges for easy navigation
+    try {
+      const range = sheet.getRange(
+        sectionRanges.loeSection.startRow,
+        1,
+        sectionRanges.loeSection.endRow - sectionRanges.loeSection.startRow + 1,
+        sectionRanges.loeSection.numColumns
+      );
+      sheet.setNamedRange('LOE_SECTION', range);
+    } catch (e) {
+      console.log('Could not create named range:', e);
     }
-  });
-  
-  const excludedTeams = [];
-  
-  Object.keys(teamIssues).forEach(team => {
-    const teamData = teamIssues[team];
-    const hasRegularWork = teamData.regularWork.length > 0;
-    
-    const crossStreamDependencies = teamData.dependencies.filter(dep => {
-      const depValueStream = normalizeValueStreamName(dep.dependsOnValuestream || dep.valueStream);
-      const isCrossStream = depValueStream && depValueStream !== normalizedCurrent;
-      if (isCrossStream) {
-        console.log('  Team "' + team + '" has cross-VS dependency: ' + dep.key + ' from ' + (dep.dependsOnValuestream || dep.valueStream));
+  }
+}
+
+// ===== UI/PROGRESS UTILITIES =====
+
+function showProgress(message) {
+  const html = `
+    <div style="padding: 20px;">
+      <p style="font-family: Arial, sans-serif; font-size: 14px;">${message}</p>
+      <div style="margin-top: 10px;">
+        <div style="width: 100%; background-color: #f0f0f0; border-radius: 5px;">
+          <div style="width: 0%; height: 20px; background-color: #4285f4; border-radius: 5px; 
+                      animation: pulse 2s ease-in-out infinite;"></div>
+        </div>
+      </div>
+    </div>
+    <style>
+      @keyframes pulse {
+        0% { opacity: 0.6; }
+        50% { opacity: 1; }
+        100% { opacity: 0.6; }
       }
-      return isCrossStream;
-    });
-    
-    const shouldExclude = !hasRegularWork && 
-                         teamData.dependencies.length > 0 && 
-                         crossStreamDependencies.length === teamData.dependencies.length;
-    
-    if (shouldExclude) {
-      const depValueStreams = [...new Set(crossStreamDependencies.map(d => d.dependsOnValuestream || d.valueStream))];
-      console.log('  EXCLUDING team "' + team + '"');
-      console.log('     Reason: Only has ' + teamData.dependencies.length + ' dependency(ies) from: ' + depValueStreams.join(', '));
-      console.log('     No regular work in ' + normalizedCurrent);
-      excludedTeams.push(team);
-    } else if (hasRegularWork) {
-      console.log('  INCLUDING team "' + team + '": Has ' + teamData.regularWork.length + ' regular work items in ' + normalizedCurrent);
-    }
-  });
+    </style>
+  `;
   
-  console.log('\nExcluded ' + excludedTeams.length + ' team(s) from ' + normalizedCurrent + ':', excludedTeams);
-  console.log('=== End Exclusion Analysis ===\n');
+  const htmlOutput = HtmlService
+    .createHtmlOutput(html)
+    .setWidth(400)
+    .setHeight(120);
   
-  return excludedTeams;
+  progressDialog = SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Processing...');
+  console.log(message);
+  Utilities.sleep(50);
 }
 
-function normalizeValueStreamName(name) {
-  if (!name) return '';
-  return name.toString().toUpperCase().trim().replace(/[-_\s]+/g, ' ').replace(/\s+/g, ' ');
+function closeProgress() {
+  const html = '<script>google.script.host.close();</script>';
+  const htmlOutput = HtmlService
+    .createHtmlOutput(html)
+    .setWidth(1)
+    .setHeight(1);
+  
+  SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Closing...');
+  Utilities.sleep(100);
 }
 
-function isExcludedTeam(teamName, excludedTeams) {
-  if (!teamName || !excludedTeams || excludedTeams.length === 0) return false;
-  const normalizedTeam = teamName.toString().toUpperCase().trim();
-  return excludedTeams.some(excludedTeam => excludedTeam.toString().toUpperCase().trim() === normalizedTeam);
-}
-
-const JIRA_CONFIG = {
-  get baseUrl() { const config = getJiraConfig(); return config.baseUrl; },
-  get email() { const config = getJiraConfig(); return config.email; },
-  get apiToken() { const config = getJiraConfig(); return config.apiToken; }
-};
-
-const FIELD_MAPPINGS = {
-  summary: 'summary',
-  status: 'status',
-  storyPoints: 'customfield_10037',
-  storyPointEstimate: 'customfield_10016',
-  epicLink: 'customfield_10014',
-  programIncrement: 'customfield_10113',
-  valueStream: 'customfield_10046',
-  orgField: 'customfield_11192',
-  piCommitment: 'customfield_10063',
-  scrumTeam: 'customfield_10040',
-  piTargetIteration: 'customfield_10061',
-  iterationStart: 'customfield_10069',
-  iterationEnd: 'customfield_10070',
-  allocation: 'customfield_10043',
-  portfolioInitiative: 'customfield_10049',
-  programInitiative: 'customfield_10050',
-  featurePoints: 'customfield_10252',
-  rag: 'customfield_10068',
-  ragNote: 'customfield_10067',
-  dependsOnValuestream: 'customfield_10114',
-  dependsOnTeam: 'customfield_10120',
-  costOfDelay: 'customfield_10065',
-  labels: 'labels',
-  sprint: 'customfield_10020',
-  fixVersions: 'fixVersions'
-};
-
-const CACHE_EXPIRATION_MINUTES = 60;
-
-const ALLOCATION_CATEGORIES = {
-  FEATURES: 'Features (Product - Compliance & Feature)',
-  TECH: 'Tech / Platform',
-  KLO: 'Planned KLO',
-  QUALITY: 'Planned Quality'
-};
-
-const COLORS = {
-  HEADER_PRIMARY: '#1B365D',
-  HEADER_SECONDARY: '#6B3FA0',
-  GOLD_ACCENT: '#FFC72C',
-  BACKGROUND_LIGHT: '#F5F5F5',
-  BACKGROUND_WARNING: '#FFF9C4',
-  BACKGROUND_ERROR: '#FFCDD2',
-  BACKGROUND_SUCCESS: '#C8E6C9',
-  BACKGROUND_DANGER: '#FFCDD2',
-  BACKGROUND_PURPLE: '#E8DEF8',
-  PLANNING_HEADER: '#E1D5E7',
-  ALLOCATION_FEATURES: '#c9daf8',
-  ALLOCATION_TECH: '#d9ead3',
-  ALLOCATION_KLO: '#fce5cd',
-  ALLOCATION_QUALITY: '#f4cccc'
-};
-
-const UI_CONFIG = {
-  DEFAULT_FONT: 'Comfortaa',
-  PROGRESS_UPDATE_INTERVAL: 500
-};
-
-const REPORT_LOG_CONFIG = {
-  sheetName: 'Report Log',
-  headers: [
-    'Generated Date', 'PI', 'Value Stream',
-    'Report Name', 'Spreadsheet URL', 'Spreadsheet ID',
-    'Epic Count', 'Status'
-  ]
-};
-
-function buildEpicJQL(programIncrement, displayValueStream) {
-  const config = VALUE_STREAM_CONFIG[displayValueStream];
+function createProgressBar(sheet, row, column, percentage) {
+  // Ensure percentage is a valid number
+  percentage = parseInt(percentage) || 0;
   
-  if (!config) {
-    console.warn('Unknown value stream: ' + displayValueStream + ', using default query');
-    return 'issuetype = Epic AND cf[10113] = "' + programIncrement + '" AND cf[10046] = "' + displayValueStream + '" AND status != "Closed"';
-  }
+  const barLength = 10;
+  let filledBars, emptyBars;
+  let displayText = '';
   
-  let jql = 'issuetype = Epic AND cf[10113] = "' + programIncrement + '" AND status != "Closed"';
-  
-  if (displayValueStream === 'AIMM') {
-    const validValueStreams = config.filter.valueStreams || ['EMA Clinical', 'EMA RAC', 'MMPM'];
-    jql += ' AND cf[10046] in ("' + validValueStreams.join('","') + '")';
-    jql += ' AND cf[10040] = "' + config.filter.scrumTeam + '"';
+  if (percentage > 100) {
+    // Overallocation - show full bar in red with percentage
+    filledBars = barLength;
+    emptyBars = 0;
+    displayText = `${'█'.repeat(filledBars)} ${percentage}%`;
   } else {
-    jql += ' AND cf[10046] = "' + displayValueStream + '"';
+    // Normal case
+    percentage = Math.max(0, Math.min(100, percentage));
+    filledBars = Math.round(percentage / 10);
+    emptyBars = barLength - filledBars;
+    displayText = '█'.repeat(filledBars) + '░'.repeat(emptyBars);
   }
   
-  console.log('JQL for ' + displayValueStream + ': ' + jql);
-  return jql;
-}
-
-function getAvailableValueStreams() {
-  return ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'Patient Collaboration', 'RCM Genie'].sort();
-}
-
-function mapAllocationToCategory(allocation) {
-  return getAllocationCategory(allocation);
-}
-
-function getAllocationCategory(allocation) {
-  if (!allocation) return ALLOCATION_CATEGORIES.FEATURES;
+  // Set the value
+  sheet.getRange(row, column).setValue(displayText);
+  sheet.getRange(row, column).setFontFamily('Courier New');
+  sheet.getRange(row, column).setFontSize(10);
   
-  const allocationLower = allocation.toString().toLowerCase().trim();
+  // Color based on percentage
+  let color;
+  if (percentage > 100) {
+    color = '#ff0000'; // Bright red for overallocation
+  } else if (percentage >= 80) {
+    color = '#00a652'; // Green
+  } else if (percentage >= 60) {
+    color = '#fbbc04'; // Yellow
+  } else {
+    color = '#ea4335'; // Red
+  }
   
-  const mappingRules = {
-    [ALLOCATION_CATEGORIES.FEATURES]: [
-      'feature', 'product', 'compliance', 'capability', 'enhancement',
-      'story', 'user story', 'requirement', 'func', 'new feature'
-    ],
-    [ALLOCATION_CATEGORIES.TECH]: [
-      'tech', 'platform', 'infrastructure', 'architecture', 'technical',
-      'system', 'framework', 'devops', 'tooling', 'engineering'
-    ],
-    [ALLOCATION_CATEGORIES.KLO]: [
-      'klo', 'keep', 'lights', 'maintenance', 'support', 'operational',
-      'ops', 'sustaining', 'keep lights on', 'bau', 'business as usual'
-    ],
-    [ALLOCATION_CATEGORIES.QUALITY]: [
-      'quality', 'defect', 'bug', 'fix', 'issue', 'problem',
-      'qa', 'test', 'testing', 'quality assurance', 'defect fix'
-    ]
+  sheet.getRange(row, column).setFontColor(color);
+}
+
+// ===== CAPACITY UTILITIES =====
+
+/**
+ * Get capacity data for a specific team
+ * @param {Spreadsheet} spreadsheet - The spreadsheet object
+ * @param {string} teamName - Name of the team
+ * @return {Object} Capacity data object with total and breakdown
+ */
+function getCapacityDataForTeam(spreadsheet, teamName) {
+  const capacitySheet = spreadsheet.getSheetByName('Capacity');
+  
+  if (!capacitySheet) {
+    console.log('Capacity sheet not found');
+    return null;
+  }
+  
+  // Get all data from capacity sheet
+  const dataRange = capacitySheet.getDataRange();
+  const values = dataRange.getValues();
+  
+  // Find the team row (case-insensitive)
+  let teamRow = -1;
+  for (let i = 0; i < values.length; i++) {
+    if (values[i][0] && values[i][0].toString().toUpperCase() === teamName.toUpperCase()) {
+      teamRow = i;
+      break;
+    }
+  }
+  
+  if (teamRow === -1) {
+    console.log(`Team ${teamName} not found in Capacity sheet`);
+    return null;
+  }
+  
+  // Get capacity values from columns B-E
+  const capacityData = {
+    feature: Number(values[teamRow][1]) || 0,      // Column B
+    tech: Number(values[teamRow][2]) || 0,         // Column C
+    klo: Number(values[teamRow][3]) || 0,          // Column D
+    quality: Number(values[teamRow][4]) || 0,      // Column E
+    total: 0
   };
   
-  for (const [category, keywords] of Object.entries(mappingRules)) {
-    for (const keyword of keywords) {
-      if (allocationLower.includes(keyword)) {
-        return category;
+  capacityData.total = capacityData.feature + capacityData.tech + capacityData.klo + capacityData.quality;
+  
+  return capacityData;
+}
+
+// ===== ALLOCATION UTILITIES =====
+
+/**
+ * Map allocation value to category for chart
+ * @param {string} allocation - The allocation value
+ * @return {string} The category name
+ */
+function mapAllocationToCategory(allocation) {
+  if (!allocation) return 'Features (Product - Compliance & Feature)';
+  
+  const allocationLower = allocation.toLowerCase();
+  
+  if (allocationLower.includes('product') || allocationLower.includes('feature') || allocationLower.includes('compliance')) {
+    return 'Features (Product - Compliance & Feature)';
+  } else if (allocationLower.includes('tech') || allocationLower.includes('platform')) {
+    return 'Tech / Platform';
+  } else if (allocationLower.includes('klo')) {
+    return 'Planned KLO';
+  } else if (allocationLower.includes('quality')) {
+    return 'Planned Quality';
+  }
+  
+  // Default to Features if no match
+  return 'Features (Product - Compliance & Feature)';
+}
+
+// ===== JIRA UTILITIES =====
+
+/**
+ * Apply JIRA hyperlinks to a column of keys
+ * @param {Sheet} sheet - The sheet to apply hyperlinks to
+ * @param {number} startRow - Starting row number
+ * @param {number} column - Column number
+ * @param {Array} keys - Array of JIRA keys
+ */
+function applyJiraHyperlinks(sheet, startRow, column, keys) {
+  if (!keys || keys.length === 0) return;
+  
+  const formulas = keys.map(key => {
+    if (!key) return [''];
+    return [`=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${key}","${key}")`];
+  });
+  
+  const range = sheet.getRange(startRow, column, keys.length, 1);
+  range.setFormulas(formulas);
+}
+
+// ===== FORMULA UTILITIES =====
+
+/**
+ * Force recalculation of all formulas in the spreadsheet
+ */
+function forceRecalculateAllFormulas() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = spreadsheet.getSheets();
+  
+  sheets.forEach(sheet => {
+    const dataRange = sheet.getDataRange();
+    const formulas = dataRange.getFormulas();
+    
+    // Find cells with formulas
+    for (let row = 0; row < formulas.length; row++) {
+      for (let col = 0; col < formulas[row].length; col++) {
+        if (formulas[row][col]) {
+          // Re-set the formula to force recalculation
+          const range = sheet.getRange(row + 1, col + 1);
+          range.setFormula(formulas[row][col]);
+        }
       }
     }
-  }
+  });
   
-  return ALLOCATION_CATEGORIES.FEATURES;
+  SpreadsheetApp.flush();
 }
 
-function getAllocationColor(allocationType) {
-  const colorMap = {
-    [ALLOCATION_CATEGORIES.FEATURES]: COLORS.ALLOCATION_FEATURES,
-    [ALLOCATION_CATEGORIES.TECH]: COLORS.ALLOCATION_TECH,
-    [ALLOCATION_CATEGORIES.KLO]: COLORS.ALLOCATION_KLO,
-    [ALLOCATION_CATEGORIES.QUALITY]: COLORS.ALLOCATION_QUALITY
-  };
-  return colorMap[allocationType] || '#ffffff';
-}
 
-function getTeamsForValueStream(valueStream) {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const registrySheet = spreadsheet.getSheetByName('Team Registry');
+/**
+ * Clean up specific columns that commonly have JIRA objects
+ */
+function cleanupSpecificColumns() {
+  const ui = SpreadsheetApp.getUi();
+  const sheet = SpreadsheetApp.getActiveSheet();
   
-  if (!registrySheet) {
-    console.log('Team Registry sheet not found, using hardcoded config');
-    return getTeamsFromConfig(valueStream);
-  }
+  // Get headers (assuming row 4)
+  const headers = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0];
   
-  console.log('Reading teams for ' + valueStream + ' from Team Registry...');
+  // Columns that typically have JIRA objects
+  const targetColumns = [
+    'Value Stream',
+    'Org',
+    'PI Commitment',
+    'Program Increment',
+    'Scrum Team',
+    'Allocation',
+    'Portfolio Initiative',
+    'Program Initiative',
+    'RAG',
+    'Analyzed Value Stream',
+    'Depends on Valuestream',
+    'Depends on Team'
+  ];
   
-  const data = registrySheet.getDataRange().getValues();
-  if (data.length < 2) {
-    console.warn('Team Registry sheet has no data');
-    return [];
-  }
-  
-  const headers = data[0];
-  const vsCol = headers.indexOf('Value Stream');
-  const teamCol = headers.indexOf('Scrum Team');
-  const activeCol = headers.indexOf('Active');
-  
-  if (vsCol === -1 || teamCol === -1 || activeCol === -1) {
-    console.error('Team Registry sheet missing required columns');
-    return getTeamsFromConfig(valueStream);
-  }
-  
-  const teams = [];
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const rowVS = row[vsCol];
-    const team = row[teamCol];
-    const active = row[activeCol];
-    
-    if (team && team.toString().includes('[Add Team Name]')) continue;
-    if (rowVS === valueStream && active === true && team) {
-      teams.push(team.toString().trim());
+  // Find column indices
+  const columnsToClean = [];
+  headers.forEach((header, index) => {
+    if (targetColumns.includes(header)) {
+      columnsToClean.push({
+        name: header,
+        index: index + 1 // 1-based for Sheets
+      });
     }
+  });
+  
+  if (columnsToClean.length === 0) {
+    ui.alert('No target columns found in this sheet.');
+    return;
   }
   
-  console.log('Found ' + teams.length + ' active teams for ' + valueStream + ':', teams.join(', '));
-  return teams;
-}
-
-function getTeamsFromConfig(valueStream) {
-  if (typeof VALUE_STREAM_CONFIG !== 'undefined' && VALUE_STREAM_CONFIG[valueStream]) {
-    const config = VALUE_STREAM_CONFIG[valueStream];
-    return config.scrumTeams || [];
-  }
+  // Show confirmation
+  const response = ui.alert(
+    'Clean Specific Columns',
+    `Found ${columnsToClean.length} columns to clean:\n${columnsToClean.map(c => c.name).join(', ')}\n\nContinue?`,
+    ui.ButtonSet.YES_NO
+  );
   
-  const fallbackTeams = {
-    'EMA Clinical': [
-      'Alchemist', 'Avengers', 'Explorers', 'Eyefinity',
-      'Mandalore', 'Ordernauts', 'Painkillers', 'Artificially Intelligent',
-      'Patience', 'Embryonics', 'Vesties', 'Spice Runners', 'Pain Killers'
-    ],
-    'MMPM': [
-      'Billionaires', 'Claimcraft', 'ClaimCraft', 'Lynx',
-      'Penny-Wise', 'Time-Keepers', 'Trailblazers', 'Kaizen'
-    ],
-    'Patient Collaboration': [
-      'Agni', 'Apollo', 'Bheem', 'Jupiter',
-      'Rubber Ducks', 'Sudo', 'Vaayu', 'Voyagers'
-    ],
-    'RCM Genie': ['Claimbots', 'Frontliners', 'Integrators', 'Vajra'],
-    'RCM': ['Claimbots', 'Frontliners', 'Integrators', 'Vajra'],
-    'EMA RAC': ['Achievers', 'Borg', 'Cyborg'],
-    'EMA RaC': ['Achievers', 'Borg', 'Cyborg'],
-    'AIMM': ['Artificially Intelligent']
-  };
-  
-  return fallbackTeams[valueStream] || [];
-}
-
-function getAllValueStreamsFromRegistry() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const registrySheet = spreadsheet.getSheetByName('Team Registry');
-  
-  if (!registrySheet) {
-    return ['AIMM', 'EMA Clinical', 'EMA RAC', 'MMPM', 'Patient Collaboration', 'RCM Genie'];
-  }
-  
-  const data = registrySheet.getDataRange().getValues();
-  const headers = data[0];
-  const vsCol = headers.indexOf('Value Stream');
-  const activeCol = headers.indexOf('Active');
-  
-  const valueStreams = new Set();
-  
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const vs = row[vsCol];
-    const active = row[activeCol];
-    if (vs && active === true) {
-      valueStreams.add(vs.toString().trim());
-    }
-  }
-  
-  return Array.from(valueStreams).sort();
-}
-
-function validateTeamRegistry(programIncrement, valueStream) {
-  console.log('\n=== Validating Team Registry for ' + valueStream + ' in ' + programIncrement + ' ===');
-  
-  const registryTeams = getTeamsForValueStream(valueStream);
-  console.log('Teams in registry: ' + registryTeams.length);
-  
-  const jql = 'cf[10113] = "' + programIncrement + '" AND cf[10046] = "' + valueStream + '"';
-  console.log('Testing with JQL: ' + jql);
+  if (response !== ui.Button.YES) return;
   
   try {
-    const issues = searchJiraIssues(jql, 100);
+    showProgress('Cleaning specific columns...');
     
-    const jiraTeams = new Set();
-    issues.forEach(issue => {
-      if (issue.scrumTeam) jiraTeams.add(issue.scrumTeam);
+    let cleanedCount = 0;
+    const lastRow = sheet.getLastRow();
+    
+    columnsToClean.forEach(column => {
+      showProgress(`Cleaning column: ${column.name}...`);
+      
+      if (lastRow > 4) {
+        const range = sheet.getRange(5, column.index, lastRow - 4, 1);
+        const values = range.getValues();
+        
+        for (let i = 0; i < values.length; i++) {
+          const cellValue = values[i][0];
+          if (typeof cellValue === 'string' && cellValue.includes('{') && cellValue.includes('value=')) {
+            const cleaned = parseSheetCellValue(cellValue);
+            if (cleaned !== cellValue) {
+              values[i][0] = cleaned;
+              cleanedCount++;
+            }
+          }
+        }
+        
+        range.setValues(values);
+      }
     });
     
-    console.log('Teams found in JIRA: ' + jiraTeams.size);
-    console.log('JIRA teams:', Array.from(jiraTeams).sort().join(', '));
-    
-    const inRegistryNotJira = registryTeams.filter(t => !jiraTeams.has(t));
-    const inJiraNotRegistry = Array.from(jiraTeams).filter(t => !registryTeams.includes(t));
-    
-    if (inRegistryNotJira.length > 0) {
-      console.warn('Teams in registry but NOT in JIRA:', inRegistryNotJira.join(', '));
-    }
-    if (inJiraNotRegistry.length > 0) {
-      console.warn('Teams in JIRA but NOT in registry:', inJiraNotRegistry.join(', '));
-      console.warn('   Add these teams to Team Registry!');
-    }
-    if (inRegistryNotJira.length === 0 && inJiraNotRegistry.length === 0) {
-      console.log('Team Registry matches JIRA perfectly!');
-    }
+    closeProgress();
+    ui.alert('Success', `Cleaned ${cleanedCount} cells across ${columnsToClean.length} columns.`, ui.ButtonSet.OK);
     
   } catch (error) {
-    console.error('Error validating teams:', error);
+    closeProgress();
+    ui.alert('Error', 'Error cleaning columns: ' + error.toString(), ui.ButtonSet.OK);
   }
+}
+
+// Add these functions to the menu
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  const menu = ui.createMenu('🧹 Data Cleanup');
+  
+  menu.addItem('Clean All Sheet Data', 'cleanupSheetData');
+  menu.addItem('Clean Specific Columns', 'cleanupSpecificColumns');
+  menu.addSeparator();
+  
+  // ... rest of your existing menu items ...
+  
+  menu.addToUi();
+}
+// ===== MAIN ANALYSIS FUNCTIONS (Referenced in menus) =====
+
+/**
+ * Setup function for initial configuration
+ */
+function setup() {
+  const ui = SpreadsheetApp.getUi();
+  ui.alert(
+    'Setup Instructions',
+    '1. Update JIRA_CONFIG in config.gs with your credentials\n' +
+    '2. Update VALUE_STREAM_CONFIG as needed\n' +
+    '3. Create a "Capacity" sheet with team capacity data\n' +
+    '4. Use the menu to analyze PI data\n\n' +
+    'For detailed instructions, see the documentation.',
+    ui.ButtonSet.OK
+  );
 }
