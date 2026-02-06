@@ -1,4 +1,3 @@
-
 /**
  * Utility Functions - Helper functions for sheet manipulation, data parsing, and UI
  * This file should be loaded after config.gs
@@ -14,11 +13,11 @@
  */
 function safeGetOrCreateSheet(spreadsheet, sheetName) {
   let sheet = spreadsheet.getSheetByName(sheetName);
-
+  
   if (!sheet) {
     sheet = spreadsheet.insertSheet(sheetName);
   }
-
+  
   return sheet;
 }
 
@@ -47,7 +46,7 @@ function createFilterViews(sheet, sectionRanges) {
   // Note: Filter views require Advanced Sheets API
   // This is a placeholder that creates basic filters instead
   console.log('Filter view creation requires Advanced Sheets API');
-
+  
   // As a fallback, we can set up the sheet for easy filtering
   if (sectionRanges.loeSection) {
     // Could add named ranges for easy navigation
@@ -73,7 +72,7 @@ function showProgress(message) {
       <p style="font-family: Arial, sans-serif; font-size: 14px;">${message}</p>
       <div style="margin-top: 10px;">
         <div style="width: 100%; background-color: #f0f0f0; border-radius: 5px;">
-          <div style="width: 0%; height: 20px; background-color: #4285f4; border-radius: 5px;
+          <div style="width: 0%; height: 20px; background-color: #4285f4; border-radius: 5px; 
                       animation: pulse 2s ease-in-out infinite;"></div>
         </div>
       </div>
@@ -86,12 +85,12 @@ function showProgress(message) {
       }
     </style>
   `;
-
+  
   const htmlOutput = HtmlService
     .createHtmlOutput(html)
     .setWidth(400)
     .setHeight(120);
-
+  
   progressDialog = SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Processing...');
   console.log(message);
   Utilities.sleep(50);
@@ -103,7 +102,7 @@ function closeProgress() {
     .createHtmlOutput(html)
     .setWidth(1)
     .setHeight(1);
-
+  
   SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Closing...');
   Utilities.sleep(100);
 }
@@ -111,11 +110,11 @@ function closeProgress() {
 function createProgressBar(sheet, row, column, percentage) {
   // Ensure percentage is a valid number
   percentage = parseInt(percentage) || 0;
-
+  
   const barLength = 10;
   let filledBars, emptyBars;
   let displayText = '';
-
+  
   if (percentage > 100) {
     // Overallocation - show full bar in red with percentage
     filledBars = barLength;
@@ -128,12 +127,12 @@ function createProgressBar(sheet, row, column, percentage) {
     emptyBars = barLength - filledBars;
     displayText = '█'.repeat(filledBars) + '░'.repeat(emptyBars);
   }
-
+  
   // Set the value
   sheet.getRange(row, column).setValue(displayText);
   sheet.getRange(row, column).setFontFamily('Courier New');
   sheet.getRange(row, column).setFontSize(10);
-
+  
   // Color based on percentage
   let color;
   if (percentage > 100) {
@@ -145,7 +144,7 @@ function createProgressBar(sheet, row, column, percentage) {
   } else {
     color = '#ea4335'; // Red
   }
-
+  
   sheet.getRange(row, column).setFontColor(color);
 }
 
@@ -159,16 +158,16 @@ function createProgressBar(sheet, row, column, percentage) {
  */
 function getCapacityDataForTeam(spreadsheet, teamName) {
   const capacitySheet = spreadsheet.getSheetByName('Capacity');
-
+  
   if (!capacitySheet) {
     console.log('Capacity sheet not found');
     return null;
   }
-
+  
   // Get all data from capacity sheet
   const dataRange = capacitySheet.getDataRange();
   const values = dataRange.getValues();
-
+  
   // Find the team row (case-insensitive)
   let teamRow = -1;
   for (let i = 0; i < values.length; i++) {
@@ -177,12 +176,12 @@ function getCapacityDataForTeam(spreadsheet, teamName) {
       break;
     }
   }
-
+  
   if (teamRow === -1) {
     console.log(`Team ${teamName} not found in Capacity sheet`);
     return null;
   }
-
+  
   // Get capacity values from columns B-E
   const capacityData = {
     feature: Number(values[teamRow][1]) || 0,      // Column B
@@ -191,9 +190,9 @@ function getCapacityDataForTeam(spreadsheet, teamName) {
     quality: Number(values[teamRow][4]) || 0,      // Column E
     total: 0
   };
-
+  
   capacityData.total = capacityData.feature + capacityData.tech + capacityData.klo + capacityData.quality;
-
+  
   return capacityData;
 }
 
@@ -206,9 +205,9 @@ function getCapacityDataForTeam(spreadsheet, teamName) {
  */
 function mapAllocationToCategory(allocation) {
   if (!allocation) return 'Features (Product - Compliance & Feature)';
-
+  
   const allocationLower = allocation.toLowerCase();
-
+  
   if (allocationLower.includes('product') || allocationLower.includes('feature') || allocationLower.includes('compliance')) {
     return 'Features (Product - Compliance & Feature)';
   } else if (allocationLower.includes('tech') || allocationLower.includes('platform')) {
@@ -218,7 +217,7 @@ function mapAllocationToCategory(allocation) {
   } else if (allocationLower.includes('quality')) {
     return 'Planned Quality';
   }
-
+  
   // Default to Features if no match
   return 'Features (Product - Compliance & Feature)';
 }
@@ -234,12 +233,12 @@ function mapAllocationToCategory(allocation) {
  */
 function applyJiraHyperlinks(sheet, startRow, column, keys) {
   if (!keys || keys.length === 0) return;
-
+  
   const formulas = keys.map(key => {
     if (!key) return [''];
     return [`=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${key}","${key}")`];
   });
-
+  
   const range = sheet.getRange(startRow, column, keys.length, 1);
   range.setFormulas(formulas);
 }
@@ -252,11 +251,11 @@ function applyJiraHyperlinks(sheet, startRow, column, keys) {
 function forceRecalculateAllFormulas() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheets = spreadsheet.getSheets();
-
+  
   sheets.forEach(sheet => {
     const dataRange = sheet.getDataRange();
     const formulas = dataRange.getFormulas();
-
+    
     // Find cells with formulas
     for (let row = 0; row < formulas.length; row++) {
       for (let col = 0; col < formulas[row].length; col++) {
@@ -268,7 +267,7 @@ function forceRecalculateAllFormulas() {
       }
     }
   });
-
+  
   SpreadsheetApp.flush();
 }
 
@@ -279,10 +278,10 @@ function forceRecalculateAllFormulas() {
 function cleanupSpecificColumns() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSheet();
-
+  
   // Get headers (assuming row 4)
   const headers = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0];
-
+  
   // Columns that typically have JIRA objects
   const targetColumns = [
     'Value Stream',
@@ -298,7 +297,7 @@ function cleanupSpecificColumns() {
     'Depends on Valuestream',
     'Depends on Team'
   ];
-
+  
   // Find column indices
   const columnsToClean = [];
   headers.forEach((header, index) => {
@@ -309,34 +308,34 @@ function cleanupSpecificColumns() {
       });
     }
   });
-
+  
   if (columnsToClean.length === 0) {
     ui.alert('No target columns found in this sheet.');
     return;
   }
-
+  
   // Show confirmation
   const response = ui.alert(
     'Clean Specific Columns',
     `Found ${columnsToClean.length} columns to clean:\n${columnsToClean.map(c => c.name).join(', ')}\n\nContinue?`,
     ui.ButtonSet.YES_NO
   );
-
+  
   if (response !== ui.Button.YES) return;
-
+  
   try {
     showProgress('Cleaning specific columns...');
-
+    
     let cleanedCount = 0;
     const lastRow = sheet.getLastRow();
-
+    
     columnsToClean.forEach(column => {
       showProgress(`Cleaning column: ${column.name}...`);
-
+      
       if (lastRow > 4) {
         const range = sheet.getRange(5, column.index, lastRow - 4, 1);
         const values = range.getValues();
-
+        
         for (let i = 0; i < values.length; i++) {
           const cellValue = values[i][0];
           if (typeof cellValue === 'string' && cellValue.includes('{') && cellValue.includes('value=')) {
@@ -347,14 +346,14 @@ function cleanupSpecificColumns() {
             }
           }
         }
-
+        
         range.setValues(values);
       }
     });
-
+    
     closeProgress();
     ui.alert('Success', `Cleaned ${cleanedCount} cells across ${columnsToClean.length} columns.`, ui.ButtonSet.OK);
-
+    
   } catch (error) {
     closeProgress();
     ui.alert('Error', 'Error cleaning columns: ' + error.toString(), ui.ButtonSet.OK);
@@ -365,13 +364,13 @@ function cleanupSpecificColumns() {
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   const menu = ui.createMenu('🧹 Data Cleanup');
-
+  
   menu.addItem('Clean All Sheet Data', 'cleanupSheetData');
   menu.addItem('Clean Specific Columns', 'cleanupSpecificColumns');
   menu.addSeparator();
-
+  
   // ... rest of your existing menu items ...
-
+  
   menu.addToUi();
 }
 // ===== MAIN ANALYSIS FUNCTIONS (Referenced in menus) =====
@@ -391,3 +390,40 @@ function setup() {
     ui.ButtonSet.OK
   );
 }
+// ===== ROLE BREAKDOWN FUNCTIONS =====
+
+/**
+ * Role name normalization mapping
+ * Maps various role names to standardized keys
+ */
+const ROLE_NORMALIZATION = {
+  // QA variations
+  'QA': 'QA',
+  'AQA': 'QA',
+  'QUALITY': 'QA',
+  
+  // Web Development
+  'W-DEV': 'W-DEV',
+  'WDEV': 'W-DEV',
+  'WEB': 'W-DEV',
+  'WEB-DEV': 'W-DEV',
+  'WEBDEV': 'W-DEV',
+  
+  // Mobile Development
+  'M-DEV': 'M-DEV',
+  'MDEV': 'M-DEV',
+  'MOBILE': 'M-DEV',
+  'MOBILE-DEV': 'M-DEV',
+  'M-ANDROID': 'M-DEV',
+  'M-IOS': 'M-DEV',
+  
+  // Backend
+  'BE': 'BE',
+  'BACKEND': 'BE',
+  'BACK-END': 'BE',
+  
+  // Frontend
+  'FE': 'FE',
+  'FRONTEND': 'FE',
+  'FRONT-END': 'FE'
+};
