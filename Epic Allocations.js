@@ -1,662 +1,89 @@
-// ===== 1. UTILITY FUNCTIONS =====
-// Progress Dialog Functions
+// ===== UTILITY FUNCTIONS =====
+function setRowHeightWithLimit(sheet, row, desiredHeight, maxHeight = 70) {
+  sheet.setRowHeight(row, Math.min(desiredHeight, maxHeight));
+}
 
-let progressDialog = null;
+function parseCostOfDelay(value) {
+  if (!value) return 0;
+
+  // If already a number, return it
+  if (typeof value === 'number') return value;
+
+  // Convert to string and clean up
+  let cleanValue = value.toString().trim();
+
+  // Remove currency symbols and commas
+  cleanValue = cleanValue.replace(/[$,]/g, '');
+
+  // Handle shorthand notations (1M, 500K, etc.)
+  if (cleanValue.match(/(\d+\.?\d*)([KMB])/i)) {
+    const match = cleanValue.match(/(\d+\.?\d*)([KMB])/i);
+    const num = parseFloat(match[1]);
+    const multiplier = match[2].toUpperCase();
+
+    switch (multiplier) {
+      case 'K': return num * 1000;
+      case 'M': return num * 1000000;
+      case 'B': return num * 1000000000;
+    }
+  }
+
+  // Try to parse as regular number
+  const parsed = parseFloat(cleanValue);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+function createProgressBar(sheet, row, column, percentage) {
+  const barLength = 20;
+  const filledLength = Math.round((percentage / 100) * barLength);
+  const emptyLength = barLength - filledLength;
+
+  const progressBar = '#'.repeat(filledLength) + '-'.repeat(emptyLength);
+
+  sheet.getRange(row, column).setValue(progressBar);
+  sheet.getRange(row, column).setFontFamily('Courier New');
+
+  // Color based on percentage
+  let color;
+  if (percentage >= 80) {
+    color = '#4CAF50'; // Green
+  } else if (percentage >= 60) {
+    color = '#FFC107'; // Yellow
+  } else {
+    color = '#F44336'; // Red
+  }
+
+  sheet.getRange(row, column).setFontColor(color);
+}
 
 function showProgress(message) {
-  const html = `
-    <div style="padding: 20px;">
-      <p style="font-family: Arial, sans-serif; font-size: 14px;">${message}</p>
+  const template = HtmlService.createHtmlOutput(`
+    <div style="padding: 20px; text-align: center;">
+      <p>${message}</p>
       <div style="margin-top: 10px;">
-        <div style="width: 100%; background-color: #f0f0f0; border-radius: 5px;">
-          <div style="width: 0%; height: 20px; background-color: #4285f4; border-radius: 5px;
-                      animation: pulse 2s ease-in-out infinite;"></div>
+        <div style="display: inline-block; border: 1px solid #ccc; width: 200px; height: 20px;">
+          <div style="background: #4CAF50; width: 50%; height: 100%; animation: progress 2s infinite;"></div>
         </div>
       </div>
     </div>
     <style>
-      @keyframes pulse {
-        0% { opacity: 0.6; }
-        50% { opacity: 1; }
-        100% { opacity: 0.6; }
+      @keyframes progress {
+        0% { width: 0%; }
+        50% { width: 100%; }
+        100% { width: 0%; }
       }
     </style>
-  `;
+  `);
 
-  const htmlOutput = HtmlService
-    .createHtmlOutput(html)
-    .setWidth(400)
-    .setHeight(120);
-
-  progressDialog = SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Processing...');
-  console.log(message);
-  Utilities.sleep(50);
+  SpreadsheetApp.getUi().showModalDialog(template, 'Processing...');
 }
 
 function closeProgress() {
-  const html = '<script>google.script.host.close();</script>';
-  const htmlOutput = HtmlService
-    .createHtmlOutput(html)
-    .setWidth(1)
-    .setHeight(1);
-
-  SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Closing...');
-  Utilities.sleep(100);
+  const html = HtmlService.createHtmlOutput('<script>google.script.host.close();</script>');
+  SpreadsheetApp.getUi().showModalDialog(html, 'Closing...');
 }
 
-// ===== 2. JIRA API FUNCTIONS =====
-function makeJiraRequest(url, method = 'GET', payload = null) {
-  const headers = {
-    'Authorization': 'Basic ' + Utilities.base64Encode(JIRA_CONFIG.email + ':' + JIRA_CONFIG.apiToken),
-    'Accept': 'application/json',
-    'Content-Type': 'application/json'
-  };
-
-  const options = {
-    method: method,
-    headers: headers,
-    muteHttpExceptions: true
-  };
-
-  if (payload && (method === 'POST' || method === 'PUT')) {
-    options.payload = JSON.stringify(payload);
-  }
-
-  try {
-    const response = UrlFetchApp.fetch(url, options);
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-
-    if (responseCode >= 200 && responseCode < 300) {
-      return JSON.parse(responseText);
-    } else {
-      console.error(`JIRA API Error (${responseCode}):`, responseText);
-      throw new Error(`JIRA API Error (${responseCode}): ${responseText}`);
-    }
-  } catch (error) {
-    console.error('Error making JIRA request:', error);
-    throw error;
-  }
-}
-
-function getDateRangeForQuery(jql) {
-  const url = `${JIRA_CONFIG.baseUrl}/rest/api/3/search/jql`;
-
-  try {
-    // Get oldest issue
-    const oldestPayload = {
-      jql: `${jql} ORDER BY created ASC`,
-      maxResults: 1,
-      fields: ['created'],
-      fieldsByKeys: false
-    };
-
-    const oldestResponse = makeJiraRequest(url, 'POST', oldestPayload);
-    const oldest = oldestResponse.issues && oldestResponse.issues.length > 0
-      ? oldestResponse.issues[0].fields.created
-      : null;
-
-    // Get newest issue
-    const newestPayload = {
-      jql: `${jql} ORDER BY created DESC`,
-      maxResults: 1,
-      fields: ['created'],
-      fieldsByKeys: false
-    };
-
-    const newestResponse = makeJiraRequest(url, 'POST', newestPayload);
-    const newest = newestResponse.issues && newestResponse.issues.length > 0
-      ? newestResponse.issues[0].fields.created
-      : null;
-
-    console.log(`Date range: ${oldest} to ${newest}`);
-
-    return { oldest, newest };
-
-  } catch (error) {
-    console.error('Error getting date range:', error);
-    return { oldest: null, newest: null };
-  }
-}
-
-function createDateChunks(startDateStr, endDateStr) {
-  const chunks = [];
-  const start = new Date(startDateStr);
-  const end = new Date(endDateStr);
-
-  let current = new Date(start);
-
-  // Create monthly chunks
-  while (current < end) {
-    const chunkStart = new Date(current);
-
-    // Move to next month
-    current.setMonth(current.getMonth() + 1);
-
-    // If this puts us past the end, use the end date
-    const chunkEnd = current > end ? new Date(end) : new Date(current);
-
-    chunks.push({
-      start: chunkStart.toISOString().split('T')[0],
-      end: chunkEnd.toISOString().split('T')[0]
-    });
-  }
-
-  return chunks;
-}
-
-/**
- * MAIN SEARCH FUNCTION - Choose the best strategy
- * This intelligently picks which workaround to use
- */
-function searchJiraIssues(jql, maxResults = 500) {
-  console.log('Searching with JQL: ' + jql);
-  console.log('Max results: ' + maxResults);
-
-  const url = JIRA_CONFIG.baseUrl + '/rest/api/3/search/jql';
-
-  const fieldsToFetch = Object.values(FIELD_MAPPINGS).concat(['issuetype', 'parent', 'key', 'resolution', 'project']);
-
-  const payload = {
-    jql: jql,
-    maxResults: maxResults,
-    fields: fieldsToFetch
-  };
-
-  try {
-    const response = makeJiraRequest(url, 'POST', payload);
-
-    if (!response) {
-      console.log('No response from API');
-      return [];
-    }
-
-    let issuesArray = null;
-
-    if (response.values && Array.isArray(response.values)) {
-      issuesArray = response.values;
-    } else if (response.issues && Array.isArray(response.issues)) {
-      issuesArray = response.issues;
-    } else {
-      console.log('No issues found in response');
-      return [];
-    }
-
-    const issues = [];
-    const seenKeys = new Set();
-
-    for (let i = 0; i < issuesArray.length; i++) {
-      const issue = issuesArray[i];
-      if (issue && issue.key && !seenKeys.has(issue.key)) {
-        seenKeys.add(issue.key);
-        issues.push(parseJiraIssue(issue));
-      }
-    }
-
-    console.log('Parsed ' + issues.length + ' unique issues');
-    return issues;
-
-  } catch (error) {
-    console.error('Error searching JIRA:', error);
-    throw error;
-  }
-}
-function fetchEpicsWithTeamChunking(programIncrement, valueStream) {
-  console.log(`\n=== Fetching Epics for ${valueStream} in ${programIncrement} using Team-Based Chunking ===`);
-
-  // Get teams from Team Registry
-  const teams = getTeamsForValueStream(valueStream);
-
-  if (teams.length === 0) {
-    console.warn(`[!] No active teams found for ${valueStream} in Team Registry`);
-    console.warn('   Falling back to non-chunked query (may hit 100-row limit)');
-
-    // Fallback to old method
-    const jql = `issuetype = Epic AND cf[10113] = "${programIncrement}" AND cf[10046] = "${valueStream}"`;
-    return searchJiraIssues(jql, 100);
-  }
-
-  console.log(`Found ${teams.length} active teams in Team Registry`);
-
-  const allEpics = [];
-  const processedKeys = new Set();
-  let totalEpics = 0;
-  let teamsWithLimitWarning = [];
-
-  // Special handling for EMA Clinical - exclude Artificially Intelligent (they're in AIMM)
-  const teamsToQuery = valueStream === 'EMA Clinical'
-    ? teams.filter(t => t !== 'Artificially Intelligent')
-    : teams;
-
-  if (valueStream === 'EMA Clinical') {
-    console.log('Excluding Artificially Intelligent team (reported separately as AIMM)');
-  }
-
-  // Fetch epics for each team
-  teamsToQuery.forEach((team, index) => {
-    console.log(`\n[${index + 1}/${teamsToQuery.length}] Fetching ${team}...`);
-
-    // Build JQL for this specific team
-    const jql = `issuetype = Epic AND cf[10113] = "${programIncrement}" AND cf[10046] = "${valueStream}" AND cf[10040] = "${team}"`;
-
-    try {
-      const teamEpics = searchJiraIssues(jql, 100);
-
-      // Check if we hit the 100-row limit (very rare but possible)
-      if (teamEpics.length === 100) {
-        console.warn(`  [!] WARNING: ${team} returned exactly 100 epics - data may be incomplete!`);
-        teamsWithLimitWarning.push(team);
-      }
-
-      // Add epics to combined results (dedupe by key)
-      let newEpics = 0;
-      teamEpics.forEach(epic => {
-        if (!processedKeys.has(epic.key)) {
-          processedKeys.add(epic.key);
-          allEpics.push(epic);
-          newEpics++;
-        }
-      });
-
-      console.log(`  ✅ Retrieved ${teamEpics.length} epics (${newEpics} new, ${teamEpics.length - newEpics} duplicates)`);
-      totalEpics += teamEpics.length;
-
-    } catch (error) {
-      console.error(`  [X] Error fetching ${team}:`, error.message);
-    }
-
-    // Small delay to avoid rate limiting
-    if (index < teamsToQuery.length - 1) {
-      Utilities.sleep(200); // 200ms delay between team queries
-    }
-  });
-
-  console.log(`\n=== Summary ===`);
-  console.log(`Teams queried: ${teamsToQuery.length}`);
-  console.log(`Total API calls: ${teamsToQuery.length}`);
-  console.log(`Total epics retrieved: ${totalEpics}`);
-  console.log(`Unique epics: ${allEpics.length}`);
-  console.log(`Duplicates removed: ${totalEpics - allEpics.length}`);
-
-  if (teamsWithLimitWarning.length > 0) {
-    console.warn(`\n[!] WARNING: ${teamsWithLimitWarning.length} team(s) hit 100-epic limit:`);
-    teamsWithLimitWarning.forEach(team => console.warn(`   - ${team}`));
-    console.warn('   These teams may have incomplete data!');
-  }
-
-  console.log(`\n✅ Successfully retrieved all ${allEpics.length} unique epics for ${valueStream}`);
-
-  return allEpics;
-}
-function fetchChildrenWithTeamChunking(epicKey, programIncrement) {
-  console.log(`Fetching children for ${epicKey}...`);
-
-  // First, try a simple query (most epics have <100 children)
-  const simpleJql = `parent = ${epicKey} AND cf[10113] = "${programIncrement}"`;
-  const children = searchJiraIssues(simpleJql, 100);
-
-  // If we hit exactly 100, there might be more
-  if (children.length === 100) {
-    console.warn(`  [!] ${epicKey} returned exactly 100 children - checking if there are more...`);
-
-    // Get the epic's value stream to determine which teams to check
-    // This is a fallback - if needed, we can split by team
-    console.warn(`  ¡ If this epic consistently hits 100 children, consider implementing team-based chunking for children too`);
-  }
-
-  console.log(`  ✅ Retrieved ${children.length} children for ${epicKey}`);
-  return children;
-}
-function fetchDependenciesWithTeamChunking(programIncrement, valueStreams) {
-  console.log(`\n=== Fetching Dependencies for ${programIncrement} ===`);
-
-  const allDependencies = [];
-  const processedKeys = new Set();
-
-  valueStreams.forEach(valueStream => {
-    console.log(`\nChecking ${valueStream} dependencies...`);
-
-    const teams = getTeamsForValueStream(valueStream);
-
-    if (teams.length === 0) {
-      console.log(`  No teams found for ${valueStream}, skipping`);
-      return;
-    }
-
-    teams.forEach(team => {
-      // Build JQL for dependencies assigned to this team
-      const jql = `cf[10113] = "${programIncrement}" AND cf[10040] = "${team}" AND cf[10120] is not EMPTY`;
-
-      try {
-        const teamDeps = searchJiraIssues(jql, 100);
-
-        teamDeps.forEach(dep => {
-          if (!processedKeys.has(dep.key)) {
-            processedKeys.add(dep.key);
-            allDependencies.push(dep);
-          }
-        });
-
-      } catch (error) {
-        console.error(`  Error fetching dependencies for ${team}:`, error.message);
-      }
-    });
-  });
-
-  console.log(`\n✅ Retrieved ${allDependencies.length} unique dependencies`);
-  return allDependencies;
-}
-
-// ===== 3. DATA PARSING FUNCTIONS =====
-function getFieldValue(field, property = null) {
-  if (!field) return '';
-
-  // Handle null, undefined
-  if (field === null || field === undefined) return '';
-
-  // Handle simple types
-  if (typeof field === 'string' || typeof field === 'number' || typeof field === 'boolean') {
-    // Check if it's a stringified object
-    if (typeof field === 'string' && field.includes('{') && field.includes('value=')) {
-      const match = field.match(/value=([^,}]+)/);
-      if (match) {
-        return match[1].trim();
-      }
-    }
-    return field.toString();
-  }
-
-  // Handle JIRA custom field objects
-  if (field && typeof field === 'object' && !Array.isArray(field)) {
-    // Check for Atlassian Document Format (ADF)
-    if (field.type === 'doc' && field.content && Array.isArray(field.content)) {
-      return parseADF(field);
-    }
-
-    // MOST IMPORTANT: Check for 'value' property first
-    if (field.hasOwnProperty('value') && field.value !== null && field.value !== undefined) {
-      return field.value.toString();
-    }
-
-    // If a specific property was requested
-    if (property && field.hasOwnProperty(property)) {
-      return getFieldValue(field[property]);
-    }
-
-    // Handle other common JIRA field properties
-    if (field.name) return field.name.toString();
-    if (field.label) return field.label.toString();
-    if (field.displayName) return field.displayName.toString();
-    if (field.key) return field.key.toString();
-
-    // Try to extract from toString representation
-    const stringified = field.toString();
-    if (stringified && stringified !== '[object Object]') {
-      const match = stringified.match(/value=([^,}]+)/);
-      if (match) {
-        return match[1].trim();
-      }
-    }
-
-    console.warn('Unable to parse field value:', JSON.stringify(field));
-    return '';
-  }
-
-  // Handle arrays
-  if (Array.isArray(field)) {
-    return field.map(item => getFieldValue(item)).filter(v => v).join(', ');
-  }
-
-  return '';
-}
-function parseADF(adfObject) {
-  if (!adfObject || !adfObject.content || !Array.isArray(adfObject.content)) {
-    return '';
-  }
-
-  let textParts = [];
-
-  function extractText(node) {
-    if (!node) return;
-
-    // If this node has text, add it
-    if (node.text) {
-      textParts.push(node.text);
-    }
-
-    // Recursively process content array
-    if (node.content && Array.isArray(node.content)) {
-      node.content.forEach(child => extractText(child));
-    }
-  }
-
-  // Process all top-level content nodes
-  adfObject.content.forEach(node => extractText(node));
-
-  return textParts.join(' ').trim();
-}
-function getNumericValue(field) {
-  if (!field) return 0;
-
-  // If it's already a number
-  if (typeof field === 'number') return field;
-
-  // If it's a string that can be converted to a number
-  if (typeof field === 'string') {
-    const num = parseFloat(field);
-    return isNaN(num) ? 0 : num;
-  }
-
-  // If it's an object with a value property
-  if (field && typeof field === 'object' && field.value !== undefined) {
-    const num = parseFloat(field.value);
-    return isNaN(num) ? 0 : num;
-  }
-
-  return 0;
-}
-
-function getComponentsValue(components) {
-  if (!components || !Array.isArray(components)) return '';
-  return components.map(comp => comp.name || '').filter(name => name).join(', ');
-}
-
-function formatDateValue(dateValue) {
-  if (!dateValue) return '';
-  try {
-    const date = new Date(dateValue);
-    return isNaN(date) ? '' : date.toLocaleDateString();
-  } catch (e) {
-    return '';
-  }
-}
-
-function getClosedTransitionDate(changelog) {
-  if (!changelog || !changelog.histories) return '';
-
-  let mostRecentClosedDate = null;
-
-  // Iterate through all history entries
-  changelog.histories.forEach(history => {
-    if (!history.items) return;
-
-    // Check each item in this history entry
-    history.items.forEach(item => {
-      // Look for status field changes
-      if (item.field === 'status' && item.toString) {
-        // Check if the new status is CLOSED (case insensitive)
-        if (item.toString.toUpperCase() === 'CLOSED') {
-          const transitionDate = new Date(history.created);
-
-          // Update if this is more recent than what we've found
-          if (!mostRecentClosedDate || transitionDate > mostRecentClosedDate) {
-            mostRecentClosedDate = transitionDate;
-          }
-        }
-      }
-    });
-  });
-
-  // Format the date if we found one
-  if (mostRecentClosedDate) {
-    // Return in a readable format with both date and time
-    return mostRecentClosedDate.toLocaleString('en-US', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    });
-  }
-
-  return '';
-}
-
-function parseJiraIssue(issue) {
-  const fields = issue.fields;
-
-  if (issue.key.endsWith('-1') || issue.key.endsWith('-10')) {
-    console.log('=== DIAGNOSTIC FOR ISSUE ' + issue.key + ' ===');
-    console.log('customfield_10120 value:', fields.customfield_10120);
-    console.log('customfield_10120 type:', typeof fields.customfield_10120);
-    console.log('All available custom fields:', Object.keys(fields).filter(k => k.startsWith('customfield')));
-  }
-  const parsedIssue = {
-    key: issue.key,
-    summary: fields.summary || '',
-    status: getFieldValue(fields.status, 'name'),
-    issueType: getFieldValue(fields.issuetype, 'name'),
-    parentKey: fields.parent?.key || '',
-    valueStream: getFieldValue(fields[FIELD_MAPPINGS.valueStream]),
-    analyzedValueStream: '',
-
-    // Apply getFieldValue to ALL custom fields
-    storyPoints: getNumericValue(fields[FIELD_MAPPINGS.storyPoints]),
-    storyPointEstimate: getNumericValue(fields[FIELD_MAPPINGS.storyPointEstimate]),
-    valueStream: getFieldValue(fields[FIELD_MAPPINGS.valueStream]),
-    org: getFieldValue(fields[FIELD_MAPPINGS.orgField]),
-    piCommitment: getFieldValue(fields[FIELD_MAPPINGS.piCommitment]),
-    programIncrement: getFieldValue(fields[FIELD_MAPPINGS.programIncrement]),
-    epicLink: getFieldValue(fields[FIELD_MAPPINGS.epicLink]),
-    scrumTeam: getFieldValue(fields[FIELD_MAPPINGS.scrumTeam]),
-    piTargetIteration: getFieldValue(fields[FIELD_MAPPINGS.piTargetIteration]),
-    iterationStart: formatDateValue(fields[FIELD_MAPPINGS.iterationStart]),
-    iterationEnd: formatDateValue(fields[FIELD_MAPPINGS.iterationEnd]),
-    allocation: getFieldValue(fields[FIELD_MAPPINGS.allocation]),
-    portfolioInitiative: getFieldValue(fields[FIELD_MAPPINGS.portfolioInitiative]),
-    programInitiative: getFieldValue(fields[FIELD_MAPPINGS.programInitiative]),
-    featurePoints: getNumericValue(fields[FIELD_MAPPINGS.featurePoints]),
-    rag: getFieldValue(fields[FIELD_MAPPINGS.rag]),
-    ragNote: getFieldValue(fields[FIELD_MAPPINGS.ragNote]) || '',
-    loeEstimate: getNumericValue(fields[FIELD_MAPPINGS.loeEstimate]),
-    dependsOnValuestream: getFieldValue(fields[FIELD_MAPPINGS.dependsOnValuestream]),
-    dependsOnTeam: getFieldValue(fields[FIELD_MAPPINGS.dependsOnTeam]),
-    costOfDelay: getNumericValue(fields[FIELD_MAPPINGS.costOfDelay]),
-
-    // New fields
-    components: getComponentsValue(fields.components),
-    closedTransitionDate: getClosedTransitionDate(issue.changelog),
-    workType: fields.issuetype?.name === 'Epic' && fields.summary ?
-              (fields.summary.toLowerCase().includes('unplanned') ? 'Unplanned' : 'Planned') : '',
-
-    // Sprint Name - only for Story and Bug types
-    sprintName: (fields.issuetype?.name === 'Story' || fields.issuetype?.name === 'Bug') && fields[FIELD_MAPPINGS.sprint] ?
-                getSprintName(fields[FIELD_MAPPINGS.sprint]) : '',
-
-    // Fix Version - for all issue types
-    fixVersion: fields.fixVersions && Array.isArray(fields.fixVersions) && fields.fixVersions.length > 0 ?
-                fields.fixVersions.map(v => v.name || '').filter(v => v).join(', ') : ''
-  };
-
-  return parsedIssue;
-}
-function getSprintName(sprintField) {
-  if (!sprintField) return '';
-
-  // Sprint field can be a string or array
-  let sprintData = sprintField;
-
-  // If it's an array, get the first active/future sprint
-  if (Array.isArray(sprintData)) {
-    // Find the most relevant sprint (active > future > closed)
-    const activeSprint = sprintData.find(s => s.state === 'active');
-    const futureSprint = sprintData.find(s => s.state === 'future');
-    sprintData = activeSprint || futureSprint || sprintData[0];
-  }
-
-  // If it's a string, try to extract sprint name
-  if (typeof sprintData === 'string') {
-    // Look for pattern like "name=Sprint 123"
-    const match = sprintData.match(/name=([^,\]]+)/);
-    if (match) return match[1].trim();
-
-    // If it's a JSON string, parse it
-    if (sprintData.startsWith('[') || sprintData.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(sprintData);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed[0].name || '';
-        } else if (parsed.name) {
-          return parsed.name;
-        }
-      } catch (e) {
-        // Not valid JSON
-      }
-    }
-
-    return sprintData;
-  }
-
-  // If it's an object
-  if (sprintData && typeof sprintData === 'object') {
-    return sprintData.name || '';
-  }
-
-  return '';
-}
-function parseSheetCellValue(cellValue) {
-  if (!cellValue) return '';
-
-  // If it's already a clean string, check for stringified objects
-  if (typeof cellValue === 'string') {
-    // First, check if it's a stringified JIRA object in Google Sheets format
-    // Format: {id=10616, self=https://..., value=Data and Analytics}
-    const sheetsObjectPattern = /^\{.*value=([^,}]+).*\}$/;
-    const sheetsMatch = cellValue.match(sheetsObjectPattern);
-    if (sheetsMatch) {
-      return sheetsMatch[1].trim();
-    }
-
-    // Check if it's a JSON stringified object
-    if (cellValue.startsWith('{') && cellValue.endsWith('}')) {
-      try {
-        const parsed = JSON.parse(cellValue);
-        if (parsed.value) return parsed.value;
-        if (parsed.name) return parsed.name;
-        if (parsed.label) return parsed.label;
-      } catch (e) {
-        // Not valid JSON, continue with other checks
-      }
-    }
-
-    return cellValue;
-  }
-
-  // If it's a number or boolean, convert to string
-  if (typeof cellValue === 'number' || typeof cellValue === 'boolean') {
-    return cellValue.toString();
-  }
-
-  // If it's an object, use getFieldValue
-  if (cellValue && typeof cellValue === 'object') {
-    return getFieldValue(cellValue);
-  }
-
-  return cellValue.toString();
-}
-
+// ===== DATA PARSING FUNCTIONS =====
 function parsePISheetRow(row, headers) {
   if (!row || !headers) {
     console.error('Missing row or headers in parsePISheetRow');
@@ -699,9 +126,10 @@ function parsePISheetRow(row, headers) {
     summary: getValue('Summary'),
     status: getValue('Status'),
     valueStream: getValue('Value Stream'),
-    analyzedValueStream: getValue('Analyzed Value Stream') || getValue('Value Stream'), // Fallback
-    org: getValue('Org'),                   // Will be cleaned by getValue
-    piCommitment: getValue('PI Commitment'), // Will be cleaned by getValue
+    // ⭐ FIX: Properly set analyzedValueStream with fallback (this was being overwritten!)
+    analyzedValueStream: getValue('Analyzed Value Stream') || getValue('Value Stream') || 'Unknown',
+    org: getValue('Org'),
+    piCommitment: getValue('PI Commitment'),
     programIncrement: getValue('Program Increment'),
     scrumTeam: getValue('Scrum Team'),
     piTargetIteration: getValue('PI Target Iteration'),
@@ -716,7 +144,7 @@ function parsePISheetRow(row, headers) {
     storyPointEstimate: getNumericValue('Story Point Estimate'),
     featurePoints: getNumericValue('Feature Points'),
     loeEstimate: getNumericValue('LOE Estimate'),
-    analyzedValueStream: getValue('Value Stream'),
+    // ⭐ REMOVED: Don't overwrite analyzedValueStream here (was line 549)
     properAllocation: getValue('Proper Allocation'),
     rowLastUpdated: getValue('Row Last Updated'),
     dependsOnValuestream: getValue('Depends on Valuestream'),
@@ -725,2357 +153,1586 @@ function parsePISheetRow(row, headers) {
     closedTransitionDate: getValue('Closed Transition Date'),
     workType: getValue('Work Type'),
     momentum: getValue('Momentum'),
-    dependsOnValuestream: getValue('dependsOnValuestream'),
-    dependsOnTeam: getValue('Depends on Team'),
     sprintName: getValue('Sprint Name'),
     fixVersion: getValue('Fix Version')
   };
 }
-function parsePISheetData(values, headers) {
-  const headerRow = 3; // Headers are on row 4 (index 3)
-  const issues = [];
 
-  // If headers not provided, try to extract from values
-  if (!headers && values && values.length > headerRow) {
-    headers = values[headerRow];
-  }
+function createValueStreamPlanningProgress(sheet, startRow, allIssues, epics, stories, valueStream) {
+  console.log(`Creating planning progress section for ${valueStream}`);
 
-  // Validate headers
-  if (!headers || !Array.isArray(headers) || headers.length === 0) {
-    console.error('Invalid or missing headers in parsePISheetData');
-    console.error('Values length:', values ? values.length : 'undefined');
-    console.error('Expected headers at row', headerRow + 1);
-    return [];
-  }
+  const spreadsheet = sheet.getParent();
+  const capacityData = getCapacityDataDynamic(spreadsheet, allIssues, valueStream);
 
-  // Ensure we have enough rows
-  if (!values || values.length <= headerRow + 1) {
-    console.log('No data rows found in PI sheet');
-    return [];
-  }
-
-  // Parse each row starting after headers
-  for (let i = headerRow + 1; i < values.length; i++) {
-    const row = values[i];
-    if (!row || !row[0]) continue; // Skip empty rows
-
-    try {
-      const issue = parsePISheetRow(row, headers);
-      if (issue && issue.key) {
-        issues.push(issue);
-      }
-    } catch (error) {
-      console.error(`Error parsing row ${i + 1}:`, error);
-      continue;
-    }
-  }
-
-  console.log(`Parsed ${issues.length} issues from sheet data`);
-  return issues;
-}
-function validateAndCleanJiraData(issues) {
-  console.log('Validating and cleaning JIRA data...');
-  let cleanedCount = 0;
-
-  issues.forEach(issue => {
-    Object.keys(issue).forEach(key => {
-      const value = issue[key];
-
-      // Clean any field that might contain a JIRA object
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        const cleanedValue = getFieldValue(value);
-        issue[key] = cleanedValue;
-        cleanedCount++;
-        console.log(`Cleaned ${key}: object → "${cleanedValue}"`);
-      }
-      // Also clean stringified objects
-      else if (typeof value === 'string' && value.includes('{') && value.includes('value=')) {
-        const cleanedValue = parseSheetCellValue(value);
-        issue[key] = cleanedValue;
-        cleanedCount++;
-        console.log(`Cleaned ${key}: stringified object → "${cleanedValue}"`);
-      }
-    });
-  });
-
-  console.log(`Cleaned ${cleanedCount} fields`);
-  return issues;
-}
-function validateDataBeforeWriting(dataRows, headers) {
-  let issuesFound = 0;
-
-  dataRows.forEach((row, rowIndex) => {
-    row.forEach((cell, colIndex) => {
-      if (cell && typeof cell === 'object' && !Array.isArray(cell)) {
-        console.error(`Row ${rowIndex + 1}, Column ${headers[colIndex]}: Contains unparsed object`, cell);
-        issuesFound++;
-        // Attempt to fix it
-        row[colIndex] = getFieldValue(cell);
-      }
-    });
-  });
-
-  if (issuesFound > 0) {
-    console.log(`Fixed ${issuesFound} cells with unparsed objects before writing`);
-  }
-
-  return dataRows;
-}
-// ===== 4. DATA TRANSFORMATION FUNCTIONS =====
-
-function cleanFieldValue(value) {
-  if (!value) return '';
-
-  // If it's already a clean primitive, check for stringified objects
-  if (typeof value === 'string') {
-    // Check for stringified JIRA object
-    if (value.includes('{') && value.includes('value=')) {
-      return parseSheetCellValue(value);
-    }
-    return value;
-  }
-
-  // If it's a number or boolean, return as is
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
-
-  // If it's an object, use getFieldValue to extract the actual value
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return getFieldValue(value);
-  }
-
-  // For arrays, join them
-  if (Array.isArray(value)) {
-    return value.map(item => cleanFieldValue(item)).filter(v => v).join(', ');
-  }
-
-  return value ? value.toString() : '';
-}
-function cleanRowData(row, headers) {
-  // Columns that typically contain JIRA objects
-  const objectColumns = [
-    'Value Stream',
-    'Org',
-    'PI Commitment',
-    'Program Increment',
-    'Scrum Team',
-    'PI Target Iteration',
-    'Allocation',
-    'Portfolio Initiative',
-    'Program Initiative',
-    'RAG',
-    'Analyzed Value Stream',
-    'Depends on Valuestream',
-    'Depends on Team'
-  ];
-
-  // Create a copy of the row
-  const cleanedRow = [...row];
-
-  // Process each cell
-  headers.forEach((header, index) => {
-    const cellValue = row[index];
-
-    // Skip null/undefined
-    if (cellValue === null || cellValue === undefined) {
-      cleanedRow[index] = '';
-      return;
-    }
-
-    // ⭐ Handle Date objects - convert to ISO string
-    if (cellValue instanceof Date) {
-      cleanedRow[index] = cellValue.toISOString();
-      return;
-    }
-
-    // Handle stringified JIRA objects in specific columns
-    if (objectColumns.includes(header)) {
-      if (typeof cellValue === 'string' &&
-          cellValue.includes('{') && cellValue.includes('value=')) {
-        cleanedRow[index] = parseSheetCellValue(cellValue);
-        return;
-      }
-
-      // Handle JIRA objects (not stringified, actual objects)
-      if (typeof cellValue === 'object' && !Array.isArray(cellValue)) {
-        cleanedRow[index] = getFieldValue(cellValue);
-        return;
-      }
-    }
-
-    // For any other objects, try to extract value
-    if (typeof cellValue === 'object' && !Array.isArray(cellValue)) {
-      cleanedRow[index] = getFieldValue(cellValue) || '';
-      return;
-    }
-
-    // Arrays - join them
-    if (Array.isArray(cellValue)) {
-      cleanedRow[index] = cellValue.join(', ');
-      return;
-    }
-  });
-
-  return cleanedRow;
-}
-
-function cleanExistingSheetData(values, headers) {
-    const targetColumns = [
-      'Value Stream', 'Org', 'PI Commitment', 'Program Increment',
-      'Scrum Team', 'PI Target Iteration', 'Allocation',
-      'Portfolio Initiative', 'Program Initiative', 'RAG',
-      'Analyzed Value Stream', 'Depends on Valuestream','Depends on Team'
-    ];
-
-    // Create a deep copy of values
-    const cleanedValues = values.map(row => [...row]);
-
-    // Get column indices
-    const columnIndices = {};
-    targetColumns.forEach(col => {
-      const index = headers.indexOf(col);
-      if (index !== -1) {
-        columnIndices[col] = index;
-      }
-    });
-
-    // Clean the data starting from row 5 (index 4)
-    for (let i = 4; i < cleanedValues.length; i++) {
-      const row = cleanedValues[i];
-      if (!row || !row[0]) continue; // Skip empty rows
-
-      Object.entries(columnIndices).forEach(([colName, colIndex]) => {
-        const cellValue = row[colIndex];
-
-        if (cellValue && typeof cellValue === 'string') {
-          // Check for Google Sheets stringified object format
-          const sheetsPattern = /^\{.*value=([^,}]+).*\}$/;
-          const match = cellValue.match(sheetsPattern);
-
-          if (match) {
-            row[colIndex] = match[1].trim();
-            console.log(`Cleaned ${colName} in row ${i + 1}: "${cellValue}" → "${row[colIndex]}"`);
-          }
-        }
-      });
-    }
-
-    return cleanedValues;
-}
-
-function mapAllocationToCategory(allocation) {
-  if (!allocation) return 'Features (Product - Compliance & Feature)';
-
-  const allocationLower = allocation.toString().toLowerCase().trim();
-
-  // Define mapping rules with multiple possible matches
-  const mappingRules = {
-    'Features (Product - Compliance & Feature)': [
-      'feature', 'product', 'compliance', 'capability', 'enhancement',
-      'story', 'user story', 'requirement', 'func', 'new feature',
-      'product feature', 'product compliance', 'compliance feature'
-    ],
-    'Tech / Platform': [
-      'tech', 'platform', 'infrastructure', 'architecture', 'technical',
-      'system', 'framework', 'devops', 'tooling', 'engineering',
-      'technical debt', 'tech debt', 'refactor', 'upgrade'
-    ],
-    'Planned KLO': [
-      'klo', 'keep', 'lights', 'maintenance', 'support', 'operational',
-      'ops', 'sustaining', 'keep lights on', 'keeping lights on',
-      'bau', 'business as usual', 'run', 'maintain'
-    ],
-    'Planned Quality': [
-      'quality', 'defect', 'bug', 'fix', 'issue', 'problem',
-      'qa', 'test', 'testing', 'quality assurance', 'defect fix',
-      'bug fix', 'production issue', 'prod issue', 'incident'
-    ]
-  };
-
-  // Check each category's rules
-  for (const [category, keywords] of Object.entries(mappingRules)) {
-    for (const keyword of keywords) {
-      if (allocationLower.includes(keyword)) {
-        console.log(`Mapped allocation "${allocation}" to category "${category}" based on keyword "${keyword}"`);
-        return category;
-      }
-    }
-  }
-
-  // Default to Features if no match
-  console.log(`No mapping found for allocation "${allocation}", defaulting to Features`);
-  return 'Features (Product - Compliance & Feature)';
-}
-
-function isPlannableIssueType(issueType) {
-  return issueType === 'Story' || issueType === 'Bug';
-}
-
-// ===== 5. JIRA DATA FETCH FUNCTIONS =====
-function fetchEpicsForAllValueStreams(valueStreams, programIncrement) {
-  const results = [];
-
-  if (!valueStreams || !Array.isArray(valueStreams)) {
-    console.error('Invalid valueStreams parameter:', valueStreams);
-    return results;
-  }
-
-  valueStreams.forEach(valueStream => {
-    try {
-      const jql = buildEpicJQL(valueStream, programIncrement);
-      console.log(`Fetching epics for ${valueStream}...`);
-
-      // Uses the rewritten searchJiraIssues with POST
-      const epics = searchJiraIssues(jql, 500);
-      const validEpics = Array.isArray(epics) ? epics : [];
-
-      results.push({
-        valueStream: valueStream,
-        epics: validEpics,
-        error: null
-      });
-
-      console.log(`[OK] Found ${validEpics.length} epics for ${valueStream}`);
-
-    } catch (error) {
-      console.error(`[X] Error fetching epics for ${valueStream}:`, error);
-      results.push({
-        valueStream: valueStream,
-        epics: [],
-        error: error.message
-      });
-    }
-  });
-
-  return results;
-}
-
-function fetchAllEpicsForPI_WithChunking(programIncrement, valueStream, globalProcessedKeys = new Set()) {
-  console.log(`\n=== Fetching epics for ${valueStream} in ${programIncrement} ===`);
-
-  const allEpics = [];
-  const processedKeys = globalProcessedKeys;
-
-  // Special handling for AIMM (unchanged)
-  if (valueStream === 'AIMM') {
-    return fetchAIMMEpics(programIncrement, processedKeys);
-  }
-
-  // NEW: Use team-based chunking
-  const epics = fetchEpicsWithTeamChunking(programIncrement, valueStream);
+  const epicStories = stories.filter(s => s.issueType === 'Story' && (s.epicLink || s.parentKey));
+  const epicsWithAllStoryPoints = new Set();
 
   epics.forEach(epic => {
-    if (!processedKeys.has(epic.key)) {
-      processedKeys.add(epic.key);
-      allEpics.push(epic);
+    const epicChildStories = epicStories.filter(s =>
+      (s.parentKey === epic.key || s.epicLink === epic.key) &&
+      s.issueType === 'Story'
+    );
+
+    if (epicChildStories.length > 0 && epicChildStories.every(s => s.storyPoints && s.storyPoints > 0)) {
+      epicsWithAllStoryPoints.add(epic.key);
     }
   });
 
-  console.log(`[OK] Total unique epics for ${valueStream}: ${allEpics.length}`);
+  const percentEpicsWithStoryPoints = epics.length > 0 ?
+    Math.round((epicsWithAllStoryPoints.size / epics.length) * 100) : 0;
 
-  return allEpics;
-}
-
-function fetchAIMMEpics(programIncrement, processedKeys = new Set()) {
-  console.log('Fetching AIMM epics...');
-  console.log('AIMM = Value Stream "EMA Clinical" AND Scrum Team "Artificially Intelligent"');
-
-  const allEpics = [];
-
-  // ✅ CORRECT: Only EMA Clinical value stream + Artificially Intelligent team
-  const jql = `issuetype = Epic AND cf[10113] = "${programIncrement}" AND cf[10046] = "EMA Clinical" AND cf[10040] = "Artificially Intelligent"`;
-
-  console.log(`AIMM JQL: ${jql}`);
-
-  try {
-    const epics = searchJiraIssues(jql, 100);
-
-    epics.forEach(epic => {
-      if (!processedKeys.has(epic.key)) {
-        processedKeys.add(epic.key);
-        // Mark as AIMM for display purposes
-        epic.analyzedValueStream = 'AIMM';
-        allEpics.push(epic);
-      } else {
-        console.log(`Skipping duplicate AIMM epic ${epic.key}`);
-      }
-    });
-
-    console.log(`[OK] Total unique AIMM epics: ${allEpics.length}`);
-
-  } catch (error) {
-    console.error(`Error fetching AIMM epics:`, error);
+  let percentCapacityAllocated = 0;
+  let capacityStatus = 'N/A';
+  if (capacityData && capacityData.total > 0) {
+    const totalStoryPoints = stories.reduce((sum, s) => sum + (s.storyPoints || 0), 0);
+    percentCapacityAllocated = Math.round((totalStoryPoints / capacityData.total) * 100);
+    capacityStatus = `${totalStoryPoints} / ${capacityData.total} points`;
   }
 
-  return allEpics;
+  sheet.getRange(startRow, 1).setValue('Planning Progress');
+  sheet.getRange(startRow, 1, 1, 4).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  startRow++;
+
+  const metricsHeaders = ['Metric', '', 'Value', 'Progress'];
+  sheet.getRange(startRow, 1, 1, metricsHeaders.length).setValues([metricsHeaders]);
+  sheet.getRange(startRow, 1, 1, metricsHeaders.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+  startRow++;
+
+  sheet.getRange(startRow, 1).setValue('% of capacity used');
+  sheet.getRange(startRow, 3).setValue(capacityStatus);
+  sheet.getRange(startRow, 1, 1, 4).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+
+  createProgressBar(sheet, startRow, 4, percentCapacityAllocated);
+
+  if (percentCapacityAllocated > 100) {
+    sheet.getRange(startRow, 3).setFontColor('#ff0000').setFontWeight('bold');
+  }
+  startRow++;
+
+  sheet.getRange(startRow, 1).setValue('% of Epics with All Stories Pointed');
+  sheet.getRange(startRow, 3).setValue(`${percentEpicsWithStoryPoints}%`);
+  sheet.getRange(startRow, 1, 1, 4).setFontSize(8).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+
+  createProgressBar(sheet, startRow, 4, percentEpicsWithStoryPoints);
+  startRow++;
+
+  return startRow;
 }
 
-function fetchStoriesForEpics(epicKeys) {
-  const allStories = [];
-  const processedKeys = new Set();
+function parsePISheetData(values, headers) {
+  const issues = [];
 
-  // Process 5 epics at a time to stay under 100 results
-  const chunkSize = 5;
-  const chunks = [];
+  // Skip header rows and process data
+  for (let i = 4; i < values.length; i++) {
+    const row = values[i];
+    if (!row[0]) continue; // Skip empty rows
 
-  for (let i = 0; i < epicKeys.length; i += chunkSize) {
-    chunks.push(epicKeys.slice(i, i + chunkSize));
+    const issue = parsePISheetRow(row, headers);
+    issues.push(issue);
   }
 
-  console.log(`Fetching stories for ${epicKeys.length} epics in ${chunks.length} chunks`);
-
-  chunks.forEach((chunk, chunkIndex) => {
-    const epicList = chunk.map(key => `"${key}"`).join(',');
-    const jql = `cf[10014] in (${epicList}) AND issuetype != Epic AND status != "Closed"`;
-
-    try {
-      const stories = searchJiraIssues(jql, 500);
-
-      stories.forEach(story => {
-        if (!processedKeys.has(story.key)) {
-          processedKeys.add(story.key);
-          allStories.push(story);
-        }
-      });
-
-      console.log(`  Chunk ${chunkIndex + 1}/${chunks.length}: ${stories.length} stories`);
-
-    } catch (error) {
-      console.error(`Error fetching chunk ${chunkIndex + 1}:`, error);
-    }
-
-    Utilities.sleep(50);
-  });
-
-  console.log(`[OK] Total unique stories: ${allStories.length}`);
-  return allStories;
+  return issues;
 }
 
-function fetchChildIssuesInBatchesOptimized(epicResults) {
-  const childIssuesMap = {};
-  const allEpicKeys = [];
+function getScrumTeamsFromPI(piNumber) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const piSheet = spreadsheet.getSheetByName(`PI ${piNumber}`);
 
-  epicResults.forEach(result => {
-    result.epics.forEach(epic => {
-      allEpicKeys.push(epic.key);
-      childIssuesMap[epic.key] = [];
-    });
-  });
-
-  if (allEpicKeys.length === 0) return childIssuesMap;
-
-  console.log(`Total epics to process: ${allEpicKeys.length}`);
-  showProgress(`Fetching child issues for ${allEpicKeys.length} epics...`);
-
-  // ✅ CHUNKED BY 5 EPICS - each batch gets <100 children
-  const batchSize = 5;
-  let totalChildrenFound = 0;
-
-  for (let i = 0; i < allEpicKeys.length; i += batchSize) {
-    const batch = allEpicKeys.slice(i, i + batchSize);
-    const batchNumber = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(allEpicKeys.length / batchSize);
-
-    showProgress(`Fetching children: batch ${batchNumber}/${totalBatches} (${totalChildrenFound} found)...`);
-
-    try {
-      const epicKeyList = batch.map(key => `"${key}"`).join(',');
-      const jql = `(parent in (${epicKeyList}) OR "Epic Link" in (${epicKeyList})) AND status != "Closed"`;
-
-      console.log(`Batch ${batchNumber}: Processing ${batch.length} epics`);
-
-      const children = searchJiraIssues(jql, 500);
-
-      children.forEach(child => {
-        const epicKey = child.epicLink || child.parentKey;
-        if (epicKey && childIssuesMap.hasOwnProperty(epicKey)) {
-          childIssuesMap[epicKey].push(child);
-          totalChildrenFound++;
-        }
-      });
-
-      console.log(`Batch ${batchNumber}: Found ${children.length} children`);
-
-    } catch (error) {
-      console.error(`Error processing batch ${batchNumber}:`, error);
-    }
-
-    if (i + batchSize < allEpicKeys.length) {
-      Utilities.sleep(100);
-    }
+  if (!piSheet) {
+    return [];
   }
 
-  console.log(`✅ Completed: ${totalChildrenFound} total children found`);
-  return childIssuesMap;
-}
-
-function getChildIssues(epicKey) {
-  // This searches across all projects by epic link
-  const jql = `cf[10014] = ${epicKey} AND status != "Closed"`;
-  return searchJiraIssues(jql);
-}
-
-function discoverValueStreamsFromJira() {
-  try {
-    console.log('Discovering all value streams in JIRA...');
-
-    const jql = `issuetype = Epic AND cf[10046] is not EMPTY ORDER BY created DESC`;
-    const url = `${JIRA_CONFIG.baseUrl}/rest/api/3/search/jql`;
-
-    const valueStreams = new Set();
-    let nextPageToken = null;
-    let totalProcessed = 0;
-    const maxToProcess = 500;
-    let pageCount = 0;
-
-    while (totalProcessed < maxToProcess && pageCount < 10) {
-      pageCount++;
-
-      const payload = {
-        jql: jql,
-        maxResults: 100,
-        fields: ['customfield_10046'],
-        fieldsByKeys: false
-      };
-
-      if (nextPageToken) {
-        payload.nextPageToken = nextPageToken;
-      }
-
-      console.log(`Fetching value streams page ${pageCount}...`);
-
-      const response = makeJiraRequest(url, 'POST', payload);
-
-      if (response && response.issues && response.issues.length > 0) {
-        response.issues.forEach(issue => {
-          const vs = issue.fields.customfield_10046;
-          if (vs) {
-            let vsValue = '';
-            if (typeof vs === 'string') {
-              vsValue = vs;
-            } else if (vs.value) {
-              vsValue = vs.value;
-            } else if (vs.name) {
-              vsValue = vs.name;
-            }
-
-            if (vsValue && vsValue.toString().trim()) {
-              valueStreams.add(vsValue.toString().trim());
-            }
-          }
-        });
-
-        totalProcessed += response.issues.length;
-
-        if (!response.nextPageToken || response.isLast) {
-          break;
-        }
-
-        nextPageToken = response.nextPageToken;
-      } else {
-        break;
-      }
-
-      Utilities.sleep(50);
-    }
-
-    const valueStreamArray = Array.from(valueStreams).sort();
-    console.log(`Found ${valueStreamArray.length} value streams (processed ${totalProcessed} issues):`, valueStreamArray);
-
-    return valueStreamArray;
-
-  } catch (error) {
-    console.error('Error discovering value streams:', error);
-    throw error;
-  }
-}
-
-function getEpicCountForValueStream(valueStream, programIncrement) {
-  try {
-    const jql = buildEpicJQL(valueStream, programIncrement);
-    const url = `${JIRA_CONFIG.baseUrl}/rest/api/3/search/jql`;
-
-    const payload = {
-      jql: jql,
-      maxResults: 1,  // Just need the count
-      fields: ['key'],
-      fieldsByKeys: false
-    };
-
-    const response = makeJiraRequest(url, 'POST', payload);
-    return response.total || 0;
-
-  } catch (error) {
-    console.error(`Error getting epic count for ${valueStream}:`, error);
-    return 0;
-  }
-}
-
-function buildEpicJQL(displayValueStream, programIncrement) {
-  const config = VALUE_STREAM_CONFIG[displayValueStream];
-
-  let jql = `issuetype = Epic AND cf[10113] = "${programIncrement}"`;
-
-  if (displayValueStream === 'AIMM') {
-    const validValueStreams = config.filter.valueStreams || ['EMA Clinical', 'EMA RAC', 'MMPM'];
-    jql += ` AND cf[10046] in ("${validValueStreams.join('","')}")`;
-    jql += ` AND cf[10040] = "${config.filter.scrumTeam}"`;
-  } else {
-    jql += ` AND cf[10046] = "${displayValueStream}"`;
-  }
-
-  console.log(`JQL for ${displayValueStream}: ${jql}`);
-  return jql;
-}
-
-function discoverScrumTeamsFromJira() {
-  try {
-    console.log('Discovering all scrum teams in JIRA...');
-
-    const jql = `issuetype = Epic AND cf[10040] is not EMPTY ORDER BY created DESC`;
-    const url = `${JIRA_CONFIG.baseUrl}/rest/api/3/search/jql`;
-
-    const payload = {
-      jql: jql,
-      maxResults: 100,
-      fields: ['customfield_10040'],
-      fieldsByKeys: false
-    };
-
-    const response = makeJiraRequest(url, 'POST', payload);
-    const scrumTeams = new Set();
-
-    if (response && response.issues) {
-      response.issues.forEach(issue => {
-        const scrumTeam = issue.fields.customfield_10040;
-
-        if (scrumTeam) {
-          const teamValue = scrumTeam.value || scrumTeam;
-          if (teamValue && teamValue.toString().trim()) {
-            scrumTeams.add(teamValue.toString().trim());
-          }
-        }
-      });
-    }
-
-    const scrumTeamArray = Array.from(scrumTeams).sort();
-    console.log(`Found ${scrumTeamArray.length} scrum teams:`, scrumTeamArray);
-    return scrumTeamArray;
-
-  } catch (error) {
-    console.error('Error discovering scrum teams:', error);
-    throw error;
-  }
-}
-
-function getAvailableValueStreams() {
-  // This should match the value streams configured in your system
-  return ['EMA Clinical', 'EMA RAC', 'MMPM', 'AIMM'];
-}
-function aggregateDependsOnTeamFromChildren(children) {
-  if (!children || children.length === 0) return '';
-
-  const teams = new Set();
-
-  children.forEach(child => {
-    if (child.dependsOnTeam && child.dependsOnTeam.trim() !== '') {
-      // Split by comma in case there are multiple teams
-      const childTeams = child.dependsOnTeam.split(',').map(t => t.trim());
-      childTeams.forEach(team => {
-        if (team) teams.add(team);
-      });
-    }
-  });
-
-  return Array.from(teams).sort().join(', ');
-}
-// ===== 6. SPREADSHEET WRITE FUNCTIONS =====
-function createJiraHyperlink(key) {
-  if (!key || key === '') return '';
-  return `=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${key}","${key}")`;
-}
-
-function createJiraHyperlinkWithText(key, additionalText) {
-  if (!key || key === '') return additionalText;
-  return `=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${key}","${key} ${additionalText}")`;
-}
-
-function applyJiraHyperlinks(sheet, startRow, column, keys) {
-  if (!keys || keys.length === 0) return;
-
-  const formulas = keys.map(key => [createJiraHyperlink(key)]);
-  sheet.getRange(startRow, column, keys.length, 1).setFormulas(formulas);
-}
-function createDataRow(issue, hasMismatch, timestamp) {
-  return [
-    issue.key,
-    issue.parentKey || '',
-    issue.epicLink || '',
-    issue.issueType,
-    issue.summary,
-    issue.status,
-    issue.valueStream || '',
-    issue.org || '',
-    issue.piCommitment || '',
-    issue.programIncrement || '',
-    issue.scrumTeam || '',
-    issue.piTargetIteration || '',
-    issue.iterationStart || '',
-    issue.iterationEnd || '',
-    issue.allocation || '',
-    issue.portfolioInitiative || '',
-    issue.programInitiative || '',
-    issue.rag || '',
-    issue.ragNote || '',
-    issue.storyPoints || 0,
-    issue.storyPointEstimate || 0,
-    issue.featurePoints || 0,
-    issue.loeEstimate || 0,
-    issue.analyzedValueStream || issue.valueStream || '', // Add this
-    issue.components || '',
-    hasMismatch ? 'MISMATCH' : '',
-    issue.momentum || '',
-    timestamp,
-    issue.dependsOnValuestream || '',
-    issue.dependsOnTeam || '',
-    issue.costOfDelay || 0,
-    issue.closedTransitionDate || '',
-    issue.workType || '',
-    issue.sprintName || '',
-    issue.fixVersion || ''
-  ];
-}
-function writeConsolidatedDataWithExistingWithHyperlinks(sheet, newIssues, existingRows, programIncrement) {
-  try {
-    console.log(`Writing ${newIssues.length} new issues and ${existingRows.length} existing rows to sheet`);
-    showProgress(`Writing data to sheet...`);
-
-    // Set font for entire sheet to Comfortaa
-    sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).setFontFamily('Comfortaa');
-
-    // Title and header setup
-    sheet.getRange(1, 1).setValue(`${programIncrement} - Value Streams Analysis (All Projects)`);
-    sheet.getRange(1, 1).setFontSize(16).setFontWeight('bold').setFontFamily('Comfortaa');
-
-    sheet.getRange(2, 1).setValue('Last Updated:');
-    sheet.getRange(2, 2).setValue(new Date().toLocaleString());
-    sheet.getRange(2, 1, 1, 2).setFontFamily('Comfortaa');
-
-    // Updated headers to remove Analyzed Value Stream and add Momentum
-    const headers = [
-      'Key', 'Parent Key', 'Epic Link', 'Issue Type', 'Summary', 'Status',
-      'Value Stream', 'Org', 'PI Commitment', 'Program Increment', 'Scrum Team',
-      'PI Target Iteration', 'Iteration Start', 'Iteration End', 'Allocation',
-      'Portfolio Initiative', 'Program Initiative', 'RAG', 'RAG Note',
-      'Story Points', 'Story Point Estimate', 'Feature Points', 'LOE Estimate',
-      'Analyzed Value Stream', 'Components', 'Proper Allocation', 'Momentum',
-      'Row Last Updated', 'Depends on Valuestream','Depends on Team', 'Cost of Delay',
-      'Closed Transition Date', 'Work Type', 'Sprint Name', 'Fix Version'
-    ];
-
-    // Set headers
-    sheet.getRange(4, 1, 1, headers.length).setValues([headers]);
-
-    // Initialize data arrays - CHANGED TO LET
-    let dataRows = [];
-    const keyFormulas = [];
-    const parentKeyFormulas = [];
-    const epicLinkFormulas = [];
-    const currentTimestamp = new Date().toLocaleString();
-    let dataRowIndex = 0;
-
-    // Track processed keys to avoid duplicates
-    const processedKeys = new Set();
-
-    // Process new issues
-    const epics = newIssues.filter(issue => issue.issueType === 'Epic');
-    const nonEpics = newIssues.filter(issue => issue.issueType !== 'Epic');
-
-    // Sort epics by allocation
-    const sortedEpics = epics.sort((a, b) => {
-      const allocA = a.allocation || '';
-      const allocB = b.allocation || '';
-      return allocA.localeCompare(allocB);
-    });
-
-    // Track which rows are epics for highlighting
-    const epicRowIndices = [];
-
-    // Process each epic and its children
-    sortedEpics.forEach(epic => {
-      // Check for allocation mismatch
-      const epicChildren = nonEpics.filter(child =>
-        child.parentKey === epic.key || child.epicLink === epic.key
-      );
-
-      const hasMismatch = epicChildren.some(child =>
-        child.allocation && epic.allocation && child.allocation !== epic.allocation
-      );
-
-      // Aggregate "Depends on Team" from children (since this field only exists at child level)
-      epic.dependsOnTeam = aggregateDependsOnTeamFromChildren(epicChildren);
-
-      // Add epic row
-      epicRowIndices.push(dataRowIndex + 5);
-      const epicRow = createDataRow(epic, hasMismatch, currentTimestamp);
-      dataRows.push(epicRow);
-      keyFormulas.push([createJiraHyperlink(epic.key)]);
-      processedKeys.add(epic.key);
-      dataRowIndex++;
-
-      // Add child rows
-      epicChildren.forEach(child => {
-        const childRow = createDataRow(child, false, currentTimestamp);
-        dataRows.push(childRow);
-        keyFormulas.push([createJiraHyperlink(child.key)]);
-
-        if (child.parentKey) {
-          parentKeyFormulas.push({
-            row: dataRowIndex + 5, // +5 because data starts at row 5
-            formula: createJiraHyperlink(child.parentKey)
-          });
-        }
-
-        if (child.epicLink) {
-          epicLinkFormulas.push({
-            row: dataRowIndex + 5,
-            formula: createJiraHyperlink(child.epicLink)
-          });
-        }
-
-        processedKeys.add(child.key);
-        dataRowIndex++;
-      });
-    });
-
-    // Process any orphaned non-epics
-    const orphanedStories = nonEpics.filter(story => {
-      const epicKey = story.parentKey || story.epicLink;
-      return !epicKey || !epics.some(e => e.key === epicKey);
-    });
-
-    orphanedStories.forEach(story => {
-      const storyRow = createDataRow(story, false, currentTimestamp);
-      dataRows.push(storyRow);
-      keyFormulas.push([createJiraHyperlink(story.key)]);
-
-      if (story.parentKey) {
-        parentKeyFormulas.push({
-          row: dataRowIndex + 5,
-          formula: createJiraHyperlink(story.parentKey)
-        });
-      }
-
-      if (story.epicLink) {
-        epicLinkFormulas.push({
-          row: dataRowIndex + 5,
-          formula: createJiraHyperlink(story.epicLink)
-        });
-      }
-
-      processedKeys.add(story.key);
-      dataRowIndex++;
-    });
-
-    // Process existing rows WITH CLEANING
-    existingRows.forEach(row => {
-      // Check if this key is already processed
-      const existingKey = row[0]; // Key is in first column
-      if (existingKey && processedKeys.has(existingKey)) {
-        console.log(`Skipping duplicate existing row: ${existingKey}`);
-        return;
-      }
-
-      // Clean the row data to remove stringified objects
-      const cleanedRow = cleanRowData(row, headers);
-
-      // Ensure the row has enough columns for all fields
-      while (cleanedRow.length < headers.length) {
-        cleanedRow.push('');
-      }
-
-      // Update the row last updated timestamp if not present
-      const timestampCol = headers.indexOf('Row Last Updated');
-      if (timestampCol !== -1 && !cleanedRow[timestampCol]) {
-        cleanedRow[timestampCol] = currentTimestamp;
-      }
-
-      // Check if this is an epic row for highlighting
-      const issueTypeCol = headers.indexOf('Issue Type');
-      if (issueTypeCol !== -1 && cleanedRow[issueTypeCol] === 'Epic') {
-        epicRowIndices.push(dataRowIndex + 5);
-      }
-
-      // If work type column is empty and we can determine it
-      const workTypeCol = headers.indexOf('Work Type');
-      const summaryCol = headers.indexOf('Summary');
-      if (workTypeCol !== -1 && !cleanedRow[workTypeCol] &&
-          cleanedRow[issueTypeCol] === 'Epic' && cleanedRow[summaryCol]) {
-        cleanedRow[workTypeCol] = cleanedRow[summaryCol].toLowerCase().includes('unplanned') ?
-                                  'Unplanned' : 'Planned';
-      }
-
-      dataRows.push(cleanedRow);
-
-      // Add hyperlink formula for existing row
-      if (existingKey) {
-        keyFormulas.push([createJiraHyperlink(existingKey)]);
-        processedKeys.add(existingKey);
-      }
-
-      dataRowIndex++;
-    });
-
-    // Validate and clean data before writing - FIXED: only call once and reassign
-    dataRows = validateDataBeforeWriting(dataRows, headers);
-
-    console.log(`Writing ${dataRows.length} total rows to sheet`);
-    showProgress(`Writing ${dataRows.length} rows to sheet...`);
-
-    // Write all data rows at once
-    if (dataRows.length > 0) {
-      // Verify data before writing
-      console.log('Verifying data before writing...');
-      let foundObjects = 0;
-      dataRows.forEach((row, rowIndex) => {
-        row.forEach((cell, colIndex) => {
-          if (cell && typeof cell === 'string' && cell.includes('{') && cell.includes('value=')) {
-            console.error(`Found uncleaned object at row ${rowIndex}, col ${colIndex}: ${cell}`);
-            foundObjects++;
-          }
-        });
-      });
-      if (foundObjects > 0) {
-        console.error(`WARNING: Found ${foundObjects} uncleaned objects!`);
-      }
-
-      sheet.getRange(5, 1, dataRows.length, headers.length).setValues(dataRows);
-
-      // Apply key hyperlinks
-      if (keyFormulas.length > 0) {
-        sheet.getRange(5, 1, keyFormulas.length, 1).setFormulas(keyFormulas);
-      }
-
-      // Apply parent key hyperlinks
-      parentKeyFormulas.forEach(item => {
-        sheet.getRange(item.row, 2).setFormula(item.formula);
-      });
-
-      // Apply epic link hyperlinks
-      epicLinkFormulas.forEach(item => {
-        sheet.getRange(item.row, 3).setFormula(item.formula);
-      });
-    }
-
-    // Apply formatting
-    sheet.getRange(4, 1, 1, headers.length)
-      .setFontWeight('bold')
-      .setBackground('#d1c4e9') // Light purple for header
-      .setFontColor('black')
-      .setFontFamily('Comfortaa');
-
-    // Highlight epic rows in light grey
-    epicRowIndices.forEach(rowIndex => {
-      sheet.getRange(rowIndex, 1, 1, headers.length).setBackground('#f5f5f5');
-    });
-
-    // Set column widths
-    sheet.setColumnWidth(1, 80);   // Key
-    sheet.setColumnWidth(2, 80);   // Parent Key
-    sheet.setColumnWidth(3, 80);   // Epic Link
-    sheet.setColumnWidth(4, 80);   // Issue Type
-    sheet.setColumnWidth(5, 300);  // Summary
-    sheet.setColumnWidth(6, 100);  // Status
-
-    // Apply text wrapping to summary column
-    sheet.getRange(5, 5, sheet.getLastRow() - 4, 1).setWrap(true);
-
-    // Freeze rows and columns
-    sheet.setFrozenRows(4);
-    sheet.setFrozenColumns(5);
-
-    // Format numeric columns
-    if (dataRows.length > 0) {
-      // Story Points columns
-      sheet.getRange(5, 20, dataRows.length, 4).setNumberFormat("#,##0");
-
-      // Feature Points column (column 22)
-      sheet.getRange(5, 22, dataRows.length, 1).setNumberFormat("#,##0");
-
-      // Cost of Delay column
-      const codCol = headers.indexOf('Cost of Delay') + 1;
-      if (codCol > 0) {
-        sheet.getRange(5, codCol, dataRows.length, 1).setNumberFormat("#,##0");
-      }
-    }
-
-    // Apply alternating row colors (but preserve epic highlighting)
-    const dataRange = sheet.getRange(5, 1, dataRows.length, headers.length);
-    dataRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY);
-
-    // Re-apply epic highlighting after banding
-    epicRowIndices.forEach(rowIndex => {
-      sheet.getRange(rowIndex, 1, 1, headers.length).setBackground('#f5f5f5');
-    });
-
-    // Apply conditional formatting for mismatches
-    const properAllocationCol = headers.indexOf('Proper Allocation') + 1;
-    if (properAllocationCol > 0 && dataRows.length > 0) {
-      const rule = SpreadsheetApp.newConditionalFormatRule()
-        .whenTextEqualTo('MISMATCH')
-        .setBackground('#ffcccc')
-        .setRanges([sheet.getRange(5, properAllocationCol, dataRows.length, 1)])
-        .build();
-
-      const rules = sheet.getConditionalFormatRules();
-      rules.push(rule);
-      sheet.setConditionalFormatRules(rules);
-    }
-
-    console.log('Data writing complete');
-
-  } catch (error) {
-    console.error('Error in writeConsolidatedDataWithExistingWithHyperlinks:', error);
-    throw error;
-  }
-}
-
-function postProcessSheetData(sheet) {
-  const dataRange = sheet.getDataRange();
+  const dataRange = piSheet.getDataRange();
   const values = dataRange.getValues();
-  const headers = values[3]; // Headers at row 4
+  const headers = values[3];
+  const teamColIndex = headers.indexOf('Scrum Team');
 
-  if (!headers || headers.length === 0) return;
+  if (teamColIndex === -1) {
+    return [];
+  }
 
-  // Target columns that commonly have JIRA objects
-  const targetColumns = [
-    'Value Stream', 'Org', 'PI Commitment', 'Program Increment',
-    'Scrum Team', 'Allocation', 'Portfolio Initiative', 'Program Initiative',
-    'RAG', 'Analyzed Value Stream', 'Depends on Valuestream', 'PI Target Iteration'
-  ];
-
-  const columnIndices = [];
-  targetColumns.forEach(colName => {
-    const index = headers.indexOf(colName);
-    if (index !== -1) {
-      columnIndices.push({ name: colName, index: index });
-    }
-  });
-
-  let cleanedCount = 0;
-  const startRow = 4; // Data starts at row 5 (index 4)
-
-  // Process each data row
-  for (let row = startRow; row < values.length; row++) {
-    const rowData = values[row];
-    if (!rowData || !rowData[0]) continue; // Skip empty rows
-
-    let rowModified = false;
-
-    // Check each target column
-    columnIndices.forEach(col => {
-      const cellValue = rowData[col.index];
-
-      if (cellValue && typeof cellValue === 'string' &&
-          cellValue.includes('{') && cellValue.includes('value=')) {
-        // Parse the stringified object
-        const cleaned = parseSheetCellValue(cellValue);
-        if (cleaned !== cellValue) {
-          rowData[col.index] = cleaned;
-          rowModified = true;
-          cleanedCount++;
-        }
-      }
-    });
-
-    // Write back the row if it was modified
-    if (rowModified) {
-      sheet.getRange(row + 1, 1, 1, rowData.length).setValues([rowData]);
+  const scrumTeams = new Set();
+  for (let i = 4; i < values.length; i++) {
+    const team = values[i][teamColIndex];
+    if (team) {
+      scrumTeams.add(team);
     }
   }
 
-  if (cleanedCount > 0) {
-    console.log(`Post-processed and cleaned ${cleanedCount} cells in sheet ${sheet.getName()}`);
-  }
-
-  return cleanedCount;
+  return Array.from(scrumTeams).sort();
 }
 
-function updatePISheetForTeam(sheet, scrumTeamName, newIssues) {
-  if (!sheet || !scrumTeamName || !newIssues) {
-    console.error('Missing required parameters in updatePISheetForTeam');
-    return;
-  }
-
-  console.log(`Updating ${newIssues.length} issues for team ${scrumTeamName}`);
-
+function getCapacityDataForTeam(spreadsheet, teamName) {
   try {
-    // Read existing data
-    const dataRange = sheet.getDataRange();
+    const capacitySheet = spreadsheet.getSheetByName('Capacity');
+    if (!capacitySheet) {
+      console.log('Capacity sheet not found');
+      return null;
+    }
+
+    const dataRange = capacitySheet.getDataRange();
     const values = dataRange.getValues();
 
-    // Validate sheet structure
-    if (!values || values.length <= 3) {
-      console.error('PI sheet has invalid structure - not enough rows');
-      return;
-    }
+    if (values.length < 3) return null;
 
-    const headers = values[3];
+    // Normalize team name for matching
+    const normalizeTeamName = (name) => {
+      return name.toUpperCase().replace(/[\s-]/g, '');
+    };
 
-    if (!headers || !Array.isArray(headers)) {
-      console.error('PI sheet has invalid headers at row 4');
-      return;
-    }
+    const normalizedSearchTeam = normalizeTeamName(teamName);
 
-    // Find column indices
-    const keyCol = headers.indexOf('Key');
-    const teamCol = headers.indexOf('Scrum Team');
-    const lastUpdatedCol = headers.indexOf('Row Last Updated');
-
-    if (keyCol === -1 || teamCol === -1) {
-      console.error('PI sheet missing required columns (Key or Scrum Team)');
-      return;
-    }
-
-    // Create a map of new issues by key
-    const newIssueMap = {};
-    newIssues.forEach(issue => {
-      if (issue && issue.key) {
-        newIssueMap[issue.key] = issue;
+    // Find the team row with flexible matching
+    let teamRow = -1;
+    for (let i = 2; i < values.length; i++) {
+      const sheetTeamName = values[i][0];
+      if (sheetTeamName) {
+        const normalizedSheetTeam = normalizeTeamName(sheetTeamName.toString());
+        if (normalizedSheetTeam === normalizedSearchTeam) {
+          teamRow = i;
+          break;
+        }
       }
-    });
+    }
 
-    const currentTimestamp = new Date().toLocaleString();
-    let updatedRows = 0;
-    let deletedRows = 0;
-    const addedRows = [];
-    const rowsToDelete = []; // Track rows to delete
-
-    // PHASE 1: Update or mark for deletion
-    for (let i = 4; i < values.length; i++) {
-      const row = values[i];
-      if (!row) continue;
-
-      const rowKey = row[keyCol];
-      const rowTeam = row[teamCol];
-
-      // Only process rows belonging to this team
-      if (rowTeam === scrumTeamName) {
-        if (rowKey && newIssueMap[rowKey]) {
-          // This row exists in JIRA - UPDATE IT
-          const updatedIssue = newIssueMap[rowKey];
-          const updatedRow = new Array(headers.length).fill('');
-
-          // Map all fields from fresh data
-          Object.keys(updatedIssue).forEach(field => {
-            const columnName = mapFieldToHeader(field);
-            const columnIndex = headers.indexOf(columnName);
-
-            if (columnIndex !== -1) {
-              updatedRow[columnIndex] = updatedIssue[field] || '';
-            }
-          });
-
-          // Update timestamp
-          if (lastUpdatedCol !== -1) {
-            updatedRow[lastUpdatedCol] = currentTimestamp;
+    // If not found, try partial matching
+    if (teamRow === -1) {
+      const teamNameUpper = teamName.toUpperCase();
+      for (let i = 2; i < values.length; i++) {
+        const sheetTeamName = values[i][0];
+        if (sheetTeamName) {
+          const sheetTeamUpper = sheetTeamName.toString().toUpperCase();
+          // Check if one contains the other
+          if (sheetTeamUpper.includes(teamNameUpper) || teamNameUpper.includes(sheetTeamUpper)) {
+            teamRow = i;
+            break;
           }
-
-          // Write this single row back immediately
-          sheet.getRange(i + 1, 1, 1, headers.length).setValues([updatedRow]);
-          updatedRows++;
-
-          // Mark this issue as processed
-          delete newIssueMap[rowKey];
-
-        } else {
-          // This row no longer exists in JIRA for this team - DELETE IT
-          rowsToDelete.push(i + 1); // Store 1-indexed row number
-          deletedRows++;
         }
       }
-      // Rows belonging to OTHER teams are left untouched
     }
 
-    // PHASE 2: Delete rows (in reverse order to maintain indices)
-    if (rowsToDelete.length > 0) {
-      console.log(`Deleting ${rowsToDelete.length} obsolete rows for ${scrumTeamName}`);
-      // Sort in descending order
-      rowsToDelete.sort((a, b) => b - a);
-
-      rowsToDelete.forEach(rowIndex => {
-        sheet.deleteRow(rowIndex);
-      });
+    if (teamRow === -1) {
+      console.log(`Team ${teamName} not found in capacity sheet`);
+      return null;
     }
 
-    // PHASE 3: Add any new issues that weren't in the sheet
-    Object.keys(newIssueMap).forEach(key => {
-      const issue = newIssueMap[key];
-      const newRow = new Array(headers.length).fill('');
+    console.log(`Found team ${teamName} at row ${teamRow + 1} in capacity sheet`);
 
-      // Map issue properties to row
-      Object.keys(issue).forEach(field => {
-        const columnName = mapFieldToHeader(field);
-        const columnIndex = headers.indexOf(columnName);
-        if (columnIndex !== -1) {
-          newRow[columnIndex] = issue[field] || '';
-        }
-      });
-
-      // Set timestamp
-      if (lastUpdatedCol !== -1) {
-        newRow[lastUpdatedCol] = currentTimestamp;
-      }
-
-      addedRows.push(newRow);
-    });
-
-    // Append new rows if any
-    if (addedRows.length > 0) {
-      const startRow = sheet.getLastRow() + 1;
-      sheet.getRange(startRow, 1, addedRows.length, headers.length).setValues(addedRows);
-
-      // Apply hyperlinks to new rows
-      const newKeys = addedRows.map((row, idx) => row[keyCol]).filter(key => key);
-      if (newKeys.length > 0) {
-        applyJiraHyperlinks(sheet, startRow, 1, newKeys);
-      }
+    // Calculate total capacity from columns B through F
+    let total = 0;
+    for (let col = 1; col <= 6; col++) {
+      total += parseFloat(values[teamRow][col]) || 0;
     }
 
-    console.log(`Team ${scrumTeamName}: Updated ${updatedRows} rows, deleted ${deletedRows} rows, added ${addedRows.length} new rows`);
+    return { total: total };
 
   } catch (error) {
-    console.error(`Error updating PI sheet for team ${scrumTeamName}:`, error);
-    throw error;
+    console.error('Error reading capacity data:', error);
+    return null;
   }
 }
 
-function applySheetFormatting(sheet, numColumns) {
-  // Apply standard formatting
-  sheet.getRange(4, 1, 1, numColumns)
+function calculateSlottedData(issues, piNumber, scrumTeam) {
+  const slottedData = {
+    product: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, total4: 0, total6: 0 },
+    tech: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, total4: 0, total6: 0 },
+    quality: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, total4: 0, total6: 0 }
+  };
+
+  // Filter for stories AND BUGS belonging to this team (case-insensitive)
+  const normalizedScrumTeam = scrumTeam.toUpperCase().replace(/[\s-]/g, '');
+  const teamStories = issues.filter(issue => {
+    // UPDATED: Include both Story and Bug types
+    if ((issue.issueType !== 'Story' && issue.issueType !== 'Bug') || !issue.sprintName) return false;
+
+    // Case-insensitive team matching
+    const issueTeam = (issue.scrumTeam || '').toUpperCase().replace(/[\s-]/g, '');
+
+    return issueTeam === normalizedScrumTeam;
+  });
+
+  console.log(`Found ${teamStories.length} stories and bugs for team ${scrumTeam} with sprints`);
+
+  teamStories.forEach(story => {
+    const storyPoints = story.storyPoints || 0;
+    if (storyPoints === 0) return;
+
+    // Parse sprint name to find iteration - more flexible pattern
+    const sprintPattern = new RegExp(`${piNumber}\\s*\\.\\s*(\\d)`, 'i');
+    const match = story.sprintName.match(sprintPattern);
+
+    if (match) {
+      const iteration = parseInt(match[1]);
+      if (iteration >= 1 && iteration <= 6) {
+        // Determine allocation category using the helper function
+        // mapAllocationToCategory and ALLOCATION_CATEGORIES are defined in the main config file
+        const category = mapAllocationToCategory(story.allocation);
+
+        if (category === ALLOCATION_CATEGORIES.FEATURES) {
+          slottedData.product[iteration] += storyPoints;
+        } else if (category === ALLOCATION_CATEGORIES.TECH) {
+          slottedData.tech[iteration] += storyPoints;
+        } else if (category === ALLOCATION_CATEGORIES.QUALITY) {
+          // Check if it's planned quality (not unplanned)
+          const summary = (story.summary || '').toLowerCase();
+          if (!summary.includes('unplanned')) {
+            slottedData.quality[iteration] += storyPoints;
+          }
+        }
+      }
+    }
+  });
+
+  // Calculate totals
+  for (let i = 1; i <= 5; i++) {
+    slottedData.product.total4 += slottedData.product[i];
+    slottedData.tech.total4 += slottedData.tech[i];
+    slottedData.quality.total4 += slottedData.quality[i];
+  }
+
+  for (let i = 1; i <= 6; i++) {
+    slottedData.product.total6 += slottedData.product[i];
+    slottedData.tech.total6 += slottedData.tech[i];
+    slottedData.quality.total6 += slottedData.quality[i];
+  }
+
+  console.log('Slotted data calculated:', slottedData);
+
+  return slottedData;
+}
+
+// ===== ROLE BREAKDOWN FUNCTIONS =====
+
+/**
+ * Role name normalization mapping
+ * Maps various role names to standardized keys
+ */
+const ROLE_NORMALIZATION = {
+  // QA variations
+  'QA': 'QA',
+  'AQA': 'QA',
+  'QUALITY': 'QA',
+
+  // Web Development
+  'W-DEV': 'W-DEV',
+  'WDEV': 'W-DEV',
+  'WEB': 'W-DEV',
+  'WEB-DEV': 'W-DEV',
+  'WEBDEV': 'W-DEV',
+
+  // Mobile Development
+  'M-DEV': 'M-DEV',
+  'MDEV': 'M-DEV',
+  'MOBILE': 'M-DEV',
+  'MOBILE-DEV': 'M-DEV',
+  'M-ANDROID': 'M-DEV',
+  'M-IOS': 'M-DEV',
+
+  // Backend
+  'BE': 'BE',
+  'BACKEND': 'BE',
+  'BACK-END': 'BE',
+
+  // Frontend
+  'FE': 'FE',
+  'FRONTEND': 'FE',
+  'FRONT-END': 'FE'
+};
+
+/**
+ * Get roles and their capacities for a team from the consolidated capacity sheet
+ * Combines Before FF and After FF capacities for each role
+ * @param {Spreadsheet} spreadsheet - The spreadsheet object
+ * @param {string} teamName - Team name to get roles for
+ * @param {string} valueStream - Optional value stream filter
+ * @returns {Object|null} { roles: { roleName: { beforeFF, afterFF, total, byIteration } }, teamFound: boolean }
+ */
+function getRolesForTeamFromCapacity(spreadsheet, teamName, valueStream = null) {
+  try {
+    // Try to find consolidated capacity sheet
+    let capacitySheet = null;
+
+    if (typeof findCapacityPlanningSheet === 'function') {
+      capacitySheet = findCapacityPlanningSheet(spreadsheet);
+    }
+
+    if (!capacitySheet) {
+      // Try common sheet names
+      const sheetNames = ['Capacity Planning', 'PI14 - Capacity', 'PI15 - Capacity'];
+      for (const name of sheetNames) {
+        capacitySheet = spreadsheet.getSheetByName(name);
+        if (capacitySheet) break;
+      }
+
+      // Try pattern matching
+      if (!capacitySheet) {
+        const allSheets = spreadsheet.getSheets();
+        for (const sheet of allSheets) {
+          if (sheet.getName().match(/^PI\s*\d+\s*-\s*Capacity$/i)) {
+            capacitySheet = sheet;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!capacitySheet) {
+      console.log('No consolidated capacity sheet found for role extraction');
+      return null;
+    }
+
+    console.log(`Looking for roles for team "${teamName}" in capacity sheet "${capacitySheet.getName()}"`);
+
+    // Find the team in the capacity sheet
+    const dataRange = capacitySheet.getDataRange();
+    const values = dataRange.getValues();
+    const maxRows = values.length;
+    const maxCols = values[0] ? values[0].length : 0;
+
+    // Normalize team name for matching
+    const normalizeTeamName = (name) => name.toUpperCase().replace(/[\s\-_]/g, '');
+    const normalizedSearchTeam = normalizeTeamName(teamName);
+
+    // Team block configuration
+    const teamBlockWidth = 11;
+    const teamBlockHeight = 25;
+
+    // Find value stream columns (Row 1)
+    const valueStreamCols = [];
+    for (let col = 0; col < maxCols; col += teamBlockWidth) {
+      const vsName = values[0][col];
+      if (vsName && vsName.toString().trim()) {
+        valueStreamCols.push({ name: vsName.toString().trim(), col: col });
+      }
+    }
+
+    // Search for the team
+    let teamLocation = null;
+
+    for (const vs of valueStreamCols) {
+      // If value stream filter specified, check if it matches
+      if (valueStream && !vs.name.toUpperCase().includes(valueStream.toUpperCase())) {
+        continue;
+      }
+
+      // Scan rows for this value stream column
+      for (let row = 2; row < maxRows; row += teamBlockHeight) {
+        const cellValue = values[row][vs.col];
+        if (cellValue && cellValue.toString().trim()) {
+          const normalizedCell = normalizeTeamName(cellValue.toString());
+          if (normalizedCell === normalizedSearchTeam ||
+              normalizedCell.includes(normalizedSearchTeam) ||
+              normalizedSearchTeam.includes(normalizedCell)) {
+            teamLocation = { row: row, col: vs.col, valueStream: vs.name };
+            console.log(`Found team "${teamName}" at row ${row + 1}, column ${vs.col + 1} in ${vs.name}`);
+            break;
+          }
+        }
+      }
+      if (teamLocation) break;
+    }
+
+    if (!teamLocation) {
+      console.log(`Team "${teamName}" not found in capacity sheet`);
+      return null;
+    }
+
+    // Extract roles from Base Capacity before FF (rows +10 to +16) and after FF (rows +18 to +24)
+    const roles = {};
+    const totalCol = teamLocation.col + 9; // Total column is at offset +9
+
+    // Role rows are at offsets +11 to +15 from team name row (relative to Base Capacity header at +10)
+    const beforeFFRoleStartOffset = 11;
+    const beforeFFRoleEndOffset = 16;
+    const afterFFRoleStartOffset = 19;
+    const afterFFRoleEndOffset = 24;
+
+    // Read Before FF roles
+    for (let offset = beforeFFRoleStartOffset; offset <= beforeFFRoleEndOffset; offset++) {
+      const row = teamLocation.row + offset;
+      if (row >= maxRows) break;
+
+      const roleName = values[row][teamLocation.col];
+      const totalValue = values[row][totalCol];
+
+      if (roleName && roleName.toString().trim() &&
+          !roleName.toString().toLowerCase().includes('base capacity')) {
+        const roleKey = roleName.toString().trim().toUpperCase();
+        const normalizedRole = ROLE_NORMALIZATION[roleKey] || roleKey;
+
+        // Parse total value
+        let total = 0;
+        if (totalValue && totalValue !== '-' && totalValue !== '') {
+          total = parseFloat(totalValue) || 0;
+        }
+
+        if (!roles[normalizedRole]) {
+          roles[normalizedRole] = {
+            displayName: roleName.toString().trim(),
+            beforeFF: 0,
+            afterFF: 0,
+            total: 0,
+            byIteration: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 }
+          };
+        }
+        roles[normalizedRole].beforeFF = total;
+
+        // Read per-iteration values (columns +3 to +8 are iterations 1-6)
+        for (let iter = 1; iter <= 6; iter++) {
+          const iterCol = teamLocation.col + 2 + iter; // +3 for iter 1, +4 for iter 2, etc.
+          const iterValue = values[row][iterCol];
+          if (iterValue && iterValue !== '-' && iterValue !== '') {
+            roles[normalizedRole].byIteration[iter] = parseFloat(iterValue) || 0;
+          }
+        }
+      }
+    }
+
+    // Read After FF roles and add to totals
+    for (let offset = afterFFRoleStartOffset; offset <= afterFFRoleEndOffset; offset++) {
+      const row = teamLocation.row + offset;
+      if (row >= maxRows) break;
+
+      const roleName = values[row][teamLocation.col];
+      const totalValue = values[row][totalCol];
+
+      if (roleName && roleName.toString().trim() &&
+          !roleName.toString().toLowerCase().includes('base capacity')) {
+        const roleKey = roleName.toString().trim().toUpperCase();
+        const normalizedRole = ROLE_NORMALIZATION[roleKey] || roleKey;
+
+        let total = 0;
+        if (totalValue && totalValue !== '-' && totalValue !== '') {
+          total = parseFloat(totalValue) || 0;
+        }
+
+        if (!roles[normalizedRole]) {
+          roles[normalizedRole] = {
+            displayName: roleName.toString().trim(),
+            beforeFF: 0,
+            afterFF: 0,
+            total: 0,
+            byIteration: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 }
+          };
+        }
+        roles[normalizedRole].afterFF = total;
+      }
+    }
+
+    // Calculate combined totals
+    Object.keys(roles).forEach(roleKey => {
+      roles[roleKey].total = roles[roleKey].beforeFF + roles[roleKey].afterFF;
+    });
+
+    // Filter out roles with zero capacity
+    const activeRoles = {};
+    Object.keys(roles).forEach(roleKey => {
+      if (roles[roleKey].total > 0) {
+        activeRoles[roleKey] = roles[roleKey];
+      }
+    });
+
+    console.log(`Found ${Object.keys(activeRoles).length} active roles for team "${teamName}":`,
+      Object.keys(activeRoles).map(r => `${r}: ${activeRoles[r].total}`).join(', '));
+
+    return { roles: activeRoles, teamFound: true, valueStream: teamLocation.valueStream };
+
+  } catch (error) {
+    console.error(`Error getting roles for team ${teamName}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Detect role from a ticket's labels or title
+ * @param {Object} issue - The issue object with labels and summary
+ * @returns {string|null} Normalized role name or null if not detected
+ */
+function detectRoleFromTicket(issue) {
+  const labels = issue.labels || [];
+  const summary = issue.summary || '';
+
+  // Define role patterns for detection
+  const rolePatterns = [
+    { pattern: /\bQA\b/i, role: 'QA' },
+    { pattern: /\bAQA\b/i, role: 'QA' },
+    { pattern: /\bBE\b/i, role: 'BE' },
+    { pattern: /\bBACKEND\b/i, role: 'BE' },
+    { pattern: /\bFE\b/i, role: 'FE' },
+    { pattern: /\bFRONTEND\b/i, role: 'FE' },
+    { pattern: /\bW-?DEV\b/i, role: 'W-DEV' },
+    { pattern: /\bWEB\b/i, role: 'W-DEV' },
+    { pattern: /\bM-?DEV\b/i, role: 'M-DEV' },
+    { pattern: /\bMOBILE\b/i, role: 'M-DEV' },
+    { pattern: /\bM-?ANDROID\b/i, role: 'M-DEV' },
+    { pattern: /\bM-?IOS\b/i, role: 'M-DEV' }
+  ];
+
+  // Method 1: Check labels first (higher priority)
+  for (const label of labels) {
+    const labelUpper = label.toString().toUpperCase().trim();
+    const normalizedRole = ROLE_NORMALIZATION[labelUpper];
+    if (normalizedRole) {
+      return normalizedRole;
+    }
+
+    // Also check patterns against labels
+    for (const rp of rolePatterns) {
+      if (rp.pattern.test(label)) {
+        return rp.role;
+      }
+    }
+  }
+
+  // Method 2: Check title prefix patterns
+  // Common patterns: [BE], (BE), BE:, BE -, BE at start
+  const prefixPatterns = [
+    /^\s*\[([A-Z\-]+)\]/i,      // [BE] at start
+    /^\s*\(([A-Z\-]+)\)/i,      // (BE) at start
+    /^\s*([A-Z\-]+)\s*:/i,      // BE: at start
+    /^\s*([A-Z\-]+)\s*-\s/i,    // BE - at start
+    /^\s*([A-Z\-]{2,6})\s+/i    // BE word at start (2-6 chars)
+  ];
+
+  for (const pattern of prefixPatterns) {
+    const match = summary.match(pattern);
+    if (match) {
+      const extracted = match[1].toUpperCase().trim();
+      const normalizedRole = ROLE_NORMALIZATION[extracted];
+      if (normalizedRole) {
+        return normalizedRole;
+      }
+
+      // Check role patterns
+      for (const rp of rolePatterns) {
+        if (rp.pattern.test(extracted)) {
+          return rp.role;
+        }
+      }
+    }
+  }
+
+  // Method 3: Check if summary contains role keywords (less reliable, only for clear cases)
+  // Only match if it appears to be a role indicator, not just part of text
+  const roleIndicatorPatterns = [
+    /\[([A-Z\-]+)\]/i,          // [BE] anywhere
+    /\(([A-Z\-]+)\)/i           // (BE) anywhere
+  ];
+
+  for (const pattern of roleIndicatorPatterns) {
+    const match = summary.match(pattern);
+    if (match) {
+      const extracted = match[1].toUpperCase().trim();
+      const normalizedRole = ROLE_NORMALIZATION[extracted];
+      if (normalizedRole) {
+        return normalizedRole;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Calculate role-based slotted data from issues
+ * @param {Array} issues - All issues
+ * @param {number} piNumber - PI number
+ * @param {string} scrumTeam - Scrum team name
+ * @param {Object} availableRoles - Roles available for this team from capacity sheet
+ * @returns {Object} Role data by iteration
+ */
+function calculateRoleSlottedData(issues, piNumber, scrumTeam, availableRoles) {
+  const roleData = {};
+
+  // Initialize role data structure
+  const roleKeys = Object.keys(availableRoles || {});
+  roleKeys.forEach(role => {
+    roleData[role] = {
+      1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0,
+      total: 0,
+      capacity: availableRoles[role].total || 0,
+      displayName: availableRoles[role].displayName || role
+    };
+  });
+
+  // Add Unassigned category
+  roleData['Unassigned'] = {
+    1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0,
+    total: 0,
+    capacity: 0,
+    displayName: 'Unassigned'
+  };
+
+  // Filter for stories and bugs belonging to this team
+  const normalizedScrumTeam = scrumTeam.toUpperCase().replace(/[\s-]/g, '');
+  const teamStories = issues.filter(issue => {
+    if ((issue.issueType !== 'Story' && issue.issueType !== 'Bug') || !issue.sprintName) return false;
+    const issueTeam = (issue.scrumTeam || '').toUpperCase().replace(/[\s-]/g, '');
+    return issueTeam === normalizedScrumTeam;
+  });
+
+  console.log(`Processing ${teamStories.length} stories/bugs for role breakdown`);
+
+  teamStories.forEach(story => {
+    const storyPoints = story.storyPoints || 0;
+    if (storyPoints === 0) return;
+
+    // Parse sprint name to find iteration
+    const sprintPattern = new RegExp(`${piNumber}\\s*\\.\\s*(\\d)`, 'i');
+    const match = story.sprintName.match(sprintPattern);
+
+    if (match) {
+      const iteration = parseInt(match[1]);
+      if (iteration >= 1 && iteration <= 6) {
+        // Detect role from ticket
+        let detectedRole = detectRoleFromTicket(story);
+
+        // If detected role exists in available roles, use it; otherwise check normalization
+        if (detectedRole && !roleData[detectedRole]) {
+          // Role detected but not in capacity - might be a variation
+          const normalized = ROLE_NORMALIZATION[detectedRole];
+          if (normalized && roleData[normalized]) {
+            detectedRole = normalized;
+          } else {
+            detectedRole = null; // Fall back to Unassigned
+          }
+        }
+
+        const roleKey = detectedRole || 'Unassigned';
+
+        if (roleData[roleKey]) {
+          roleData[roleKey][iteration] += storyPoints;
+          roleData[roleKey].total += storyPoints;
+        }
+      }
+    }
+  });
+
+  console.log('Role breakdown calculated:',
+    Object.keys(roleData).map(r => `${r}: ${roleData[r].total}`).join(', '));
+
+  return roleData;
+}
+
+/**
+ * Create Role Breakdown chart on the sheet
+ * @param {Sheet} sheet - The sheet to write to
+ * @param {number} startRow - Starting row number
+ * @param {Array} issues - All issues
+ * @param {string} scrumTeam - Scrum team name
+ * @param {string} programIncrement - PI string (e.g., "PI 14")
+ * @param {Spreadsheet} spreadsheet - The spreadsheet object
+ * @returns {number} Next available row after the chart
+ */
+function createRoleBreakdownChart(sheet, startRow, issues, scrumTeam, programIncrement, spreadsheet) {
+  console.log(`Creating Role Breakdown chart for ${scrumTeam}`);
+
+  // Extract PI number
+  const piNumber = parseInt(programIncrement.replace('PI ', ''));
+  if (isNaN(piNumber)) {
+    console.error('Invalid PI number in programIncrement:', programIncrement);
+    return startRow;
+  }
+
+  // Get roles for this team from capacity sheet
+  const roleCapacity = getRolesForTeamFromCapacity(spreadsheet, scrumTeam);
+
+  if (!roleCapacity || !roleCapacity.roles || Object.keys(roleCapacity.roles).length === 0) {
+    console.log(`No roles found for team ${scrumTeam} - skipping Role Breakdown section`);
+    return startRow;
+  }
+
+  // Calculate role-based slotted data
+  const roleData = calculateRoleSlottedData(issues, piNumber, scrumTeam, roleCapacity.roles);
+
+  // Check if there's any data to show (at least one role with capacity or usage)
+  const hasData = Object.keys(roleData).some(role =>
+    roleData[role].total > 0 || roleData[role].capacity > 0
+  );
+
+  if (!hasData) {
+    console.log(`No role data found for team ${scrumTeam} - skipping Role Breakdown section`);
+    return startRow;
+  }
+
+  // Filter roles to show (has capacity or has usage)
+  const rolesToShow = Object.keys(roleData).filter(role =>
+    roleData[role].capacity > 0 || roleData[role].total > 0
+  );
+
+  // Sort roles: named roles first (by capacity descending), Unassigned last
+  rolesToShow.sort((a, b) => {
+    if (a === 'Unassigned') return 1;
+    if (b === 'Unassigned') return -1;
+    return (roleData[b].capacity || 0) - (roleData[a].capacity || 0);
+  });
+
+  // === RENDER THE CHART ===
+
+  // Title row
+  sheet.getRange(startRow, 1).setValue('Role Breakdown');
+  sheet.getRange(startRow, 1, 1, 12).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+  startRow++;
+
+  // Headers
+  const headers = [
+    'Role', 'Baseline Capacity',
+    `${piNumber}.1`, `${piNumber}.2`, `${piNumber}.3`, `${piNumber}.4`, `${piNumber}.5`, `${piNumber}.6`,
+    'Total Used', 'Remaining for Use', '% Remaining'
+  ];
+
+  sheet.getRange(startRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(startRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle')
+    .setHorizontalAlignment('center');
+
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+
+  const headerRow = startRow;
+  startRow++;
+  const dataStartRow = startRow;
+
+  // Data rows
+  rolesToShow.forEach((roleKey, index) => {
+    const role = roleData[roleKey];
+    const capacity = Math.ceil(role.capacity || 0);
+    const totalUsed = Math.ceil(role.total || 0);
+    const remaining = capacity - totalUsed;
+    const percentRemaining = capacity > 0 ? Math.round((remaining / capacity) * 100) : (totalUsed > 0 ? -100 : 0);
+
+    const rowData = [
+      role.displayName || roleKey,
+      capacity,
+      Math.round(role[1] || 0),
+      Math.round(role[2] || 0),
+      Math.round(role[3] || 0),
+      Math.round(role[4] || 0),
+      Math.round(role[5] || 0),
+      Math.round(role[6] || 0),
+      totalUsed,
+      remaining,
+      percentRemaining + '%'
+    ];
+
+    sheet.getRange(startRow, 1, 1, rowData.length).setValues([rowData]);
+
+    // Formatting
+    sheet.getRange(startRow, 1, 1, headers.length)
+      .setFontSize(8)
+      .setWrap(true)
+      .setFontFamily('Comfortaa')
+      .setVerticalAlignment('middle');
+
+    sheet.getRange(startRow, 2, 1, headers.length - 1).setHorizontalAlignment('center');
+
+    // Alternate row coloring
+    if (index % 2 === 1) {
+      sheet.getRange(startRow, 1, 1, headers.length).setBackground('#f5f5f5');
+    }
+
+    // Color code the Remaining column (column 10)
+    if (remaining >= 0) {
+      sheet.getRange(startRow, 10).setBackground('#ccffcc'); // Green for positive
+    } else {
+      sheet.getRange(startRow, 10).setBackground('#ffcccc'); // Red for negative
+    }
+
+    // Color code % Remaining (column 11)
+    if (percentRemaining >= 0) {
+      sheet.getRange(startRow, 11).setBackground('#ccffcc');
+    } else {
+      sheet.getRange(startRow, 11).setBackground('#ffcccc');
+    }
+
+    // Highlight Unassigned row differently
+    if (roleKey === 'Unassigned' && role.total > 0) {
+      sheet.getRange(startRow, 1).setBackground('#fff3cd'); // Light yellow warning
+      sheet.getRange(startRow, 9).setBackground('#fff3cd');
+    }
+
+    setRowHeightWithLimit(sheet, startRow, 25, 70);
+    startRow++;
+  });
+
+  const dataEndRow = startRow - 1;
+
+  // Add totals row
+  const totalCapacity = rolesToShow.reduce((sum, r) => sum + (roleData[r].capacity || 0), 0);
+  const totalUsed = rolesToShow.reduce((sum, r) => sum + (roleData[r].total || 0), 0);
+  const totalRemaining = totalCapacity - totalUsed;
+  const totalPercentRemaining = totalCapacity > 0 ? Math.round((totalRemaining / totalCapacity) * 100) : 0;
+
+  // Sum iterations
+  const iterTotals = [0, 0, 0, 0, 0, 0];
+  rolesToShow.forEach(r => {
+    for (let i = 1; i <= 6; i++) {
+      iterTotals[i - 1] += roleData[r][i] || 0;
+    }
+  });
+
+  const totalRowData = [
+    'TOTAL',
+    Math.ceil(totalCapacity),
+    Math.round(iterTotals[0]),
+    Math.round(iterTotals[1]),
+    Math.round(iterTotals[2]),
+    Math.round(iterTotals[3]),
+    Math.round(iterTotals[4]),
+    Math.round(iterTotals[5]),
+    Math.ceil(totalUsed),
+    Math.ceil(totalRemaining),
+    totalPercentRemaining + '%'
+  ];
+
+  sheet.getRange(startRow, 1, 1, totalRowData.length).setValues([totalRowData]);
+  sheet.getRange(startRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#e0e0e0')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+  sheet.getRange(startRow, 2, 1, headers.length - 1).setHorizontalAlignment('center');
+
+  // Color totals remaining
+  if (totalRemaining >= 0) {
+    sheet.getRange(startRow, 10).setBackground('#ccffcc');
+  } else {
+    sheet.getRange(startRow, 10).setBackground('#ffcccc');
+  }
+  if (totalPercentRemaining >= 0) {
+    sheet.getRange(startRow, 11).setBackground('#ccffcc');
+  } else {
+    sheet.getRange(startRow, 11).setBackground('#ffcccc');
+  }
+
+  setRowHeightWithLimit(sheet, startRow, 25, 70);
+
+  // Add borders around the table
+  sheet.getRange(headerRow, 1, startRow - headerRow + 1, headers.length).setBorder(
+    true, true, true, true, false, false,
+    '#555555', SpreadsheetApp.BorderStyle.SOLID_MEDIUM
+  );
+
+  // Add thick border between header and data
+  sheet.getRange(headerRow, 1, 1, headers.length).setBorder(
+    true, true, true, true, false, false,
+    '#333333', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // Add thick border above totals row
+  sheet.getRange(startRow, 1, 1, headers.length).setBorder(
+    true, true, true, true, false, false,
+    '#333333', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  startRow++;
+
+  console.log(`Role Breakdown chart created with ${rolesToShow.length} roles`);
+
+  return startRow + 1;
+}
+
+// ===== TEAM INITIATIVE ANALYSIS FUNCTIONS =====
+
+/**
+ * Create Initiative Analysis section for team summary
+ * Shows Portfolio Initiative and Program Initiative distribution with pie charts
+ * @param {Sheet} sheet - The sheet to write to
+ * @param {number} startRow - Starting row
+ * @param {Array} issues - All issues for this team
+ * @param {string} scrumTeam - Team name
+ * @param {string} programIncrement - PI string (e.g., "PI 14")
+ * @returns {number} Next available row
+ */
+function createTeamInitiativeAnalysis(sheet, startRow, issues, scrumTeam, programIncrement) {
+  console.log(`Creating Initiative Analysis for ${scrumTeam}`);
+
+  // Filter for epics only
+  const epics = issues.filter(issue => issue.issueType === 'Epic');
+
+  if (epics.length === 0) {
+    console.log(`No epics found for ${scrumTeam} - skipping Initiative Analysis`);
+    return startRow;
+  }
+
+  // Check if any epics have initiative data
+  const hasPortfolioData = epics.some(e => e.portfolioInitiative && e.portfolioInitiative.trim());
+  const hasProgramData = epics.some(e => e.programInitiative && e.programInitiative.trim());
+
+  if (!hasPortfolioData && !hasProgramData) {
+    console.log(`No initiative data found for ${scrumTeam} - skipping Initiative Analysis`);
+    return startRow;
+  }
+
+  let currentRow = startRow;
+
+  // Section title
+  sheet.getRange(currentRow, 1).setValue('Initiative Analysis');
+  sheet.getRange(currentRow, 1, 1, 12).setBackground('#E1D5E7');
+  sheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(currentRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(currentRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, currentRow, 30, 70);
+  currentRow += 2;
+
+  // ===== PORTFOLIO INITIATIVE SECTION =====
+  if (hasPortfolioData) {
+    currentRow = writeTeamInitiativeTable(
+      sheet,
+      currentRow,
+      epics,
+      'portfolioInitiative',
+      'Portfolio Initiative',
+      true  // Include pie chart
+    );
+    currentRow += 2;
+  }
+
+  // ===== PROGRAM INITIATIVE SECTION =====
+  if (hasProgramData) {
+    currentRow = writeTeamInitiativeTable(
+      sheet,
+      currentRow,
+      epics,
+      'programInitiative',
+      'Program Initiative',
+      true  // Include pie chart
+    );
+    currentRow += 2;
+  }
+
+  console.log(`Initiative Analysis created for ${scrumTeam}`);
+  return currentRow;
+}
+
+/**
+ * Write initiative distribution table with optional pie chart
+ * @param {Sheet} sheet - The sheet to write to
+ * @param {number} startRow - Starting row
+ * @param {Array} epics - Epic issues
+ * @param {string} field - Field name ('portfolioInitiative' or 'programInitiative')
+ * @param {string} label - Display label
+ * @param {boolean} includeChart - Whether to include a pie chart
+ * @returns {number} Next available row
+ */
+function writeTeamInitiativeTable(sheet, startRow, epics, field, label, includeChart = true) {
+  let currentRow = startRow;
+
+  // Sub-section header
+  sheet.getRange(currentRow, 1).setValue(`${label} Distribution`);
+  sheet.getRange(currentRow, 1, 1, 5)
+    .setFontSize(11)
     .setFontWeight('bold')
     .setBackground('#9b7bb8')
     .setFontColor('white')
     .setFontFamily('Comfortaa');
+  setRowHeightWithLimit(sheet, currentRow, 25, 70);
+  currentRow++;
 
-  sheet.setFrozenRows(4);
-  sheet.setFrozenColumns(4);
+  // Calculate distribution
+  const distribution = calculateTeamInitiativeDistribution(epics, field);
 
-  // Column widths
-  sheet.setColumnWidth(1, 80);  // Key
-  sheet.setColumnWidth(5, 200);  // Summary
-}
-
-function formatCostOfDelayColumns(sheet) {
-  const dataRange = sheet.getDataRange();
-  const values = dataRange.getValues();
-
-  // Find the header row (should be row 4, index 3)
-  const headerRow = 3;
-  const headers = values[headerRow];
-
-  // Find the Cost of Delay column
-  const costOfDelayCol = headers.indexOf('Cost of Delay');
-
-  if (costOfDelayCol !== -1) {
-    // Get the data range for this column (starting from row 5)
-    const lastRow = sheet.getLastRow();
-    if (lastRow > 4) {
-      const columnRange = sheet.getRange(5, costOfDelayCol + 1, lastRow - 4, 1);
-      // Format as number with comma separator
-      columnRange.setNumberFormat("#,##0");
-    }
-  }
-}
-
-function cleanSheetAfterWrite(sheetName) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
-  if (!sheet) {
-    console.error(`Sheet ${sheetName} not found`);
-    return;
+  if (distribution.rows.length === 0) {
+    sheet.getRange(currentRow, 1).setValue(`No ${label} data available`);
+    sheet.getRange(currentRow, 1).setFontStyle('italic').setFontColor('#666666').setFontFamily('Comfortaa');
+    return currentRow + 1;
   }
 
-  const headers = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const lastRow = sheet.getLastRow();
+  // Headers
+  const headers = [label, 'Epic Count', 'Total Points', '% of Total'];
+  sheet.getRange(currentRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(currentRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#1B365D')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setFontFamily('Comfortaa')
+    .setHorizontalAlignment('center');
+  setRowHeightWithLimit(sheet, currentRow, 25, 70);
 
-  if (lastRow <= 4) return; // No data rows
+  const headerRow = currentRow;
+  currentRow++;
+  const dataStartRow = currentRow;
 
-  // Columns that typically contain JIRA objects
-  const objectColumns = [
-    'Value Stream',
-    'Org',
-    'PI Commitment',
-    'Program Increment',
-    'Scrum Team',
-    'Allocation',
-    'Portfolio Initiative',
-    'Program Initiative',
-    'RAG',
-    'Analyzed Value Stream',
-    'Depends on Valuestream'
-  ];
+  // Data rows
+  sheet.getRange(currentRow, 1, distribution.rows.length, headers.length)
+    .setValues(distribution.rows);
+  sheet.getRange(currentRow, 1, distribution.rows.length, headers.length)
+    .setFontSize(8)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+  sheet.getRange(currentRow, 2, distribution.rows.length, 3)
+    .setHorizontalAlignment('center');
 
-  let cleanedCount = 0;
-
-  objectColumns.forEach(columnName => {
-    const columnIndex = headers.indexOf(columnName);
-    if (columnIndex === -1) return;
-
-    const columnNumber = columnIndex + 1;
-    const range = sheet.getRange(5, columnNumber, lastRow - 4, 1);
-    const values = range.getValues();
-    let hasChanges = false;
-
-    for (let i = 0; i < values.length; i++) {
-      const cellValue = values[i][0];
-
-      if (cellValue && typeof cellValue === 'string' &&
-          cellValue.includes('{') && cellValue.includes('value=')) {
-        values[i][0] = parseSheetCellValue(cellValue);
-        hasChanges = true;
-        cleanedCount++;
-      }
+  // Alternate row coloring
+  for (let i = 0; i < distribution.rows.length; i++) {
+    if (i % 2 === 1) {
+      sheet.getRange(currentRow + i, 1, 1, headers.length).setBackground('#f5f5f5');
     }
+    setRowHeightWithLimit(sheet, currentRow + i, 22, 70);
+  }
 
-    if (hasChanges) {
-      range.setValues(values);
+  currentRow += distribution.rows.length;
+
+  // Totals row
+  const totals = ['TOTAL', distribution.totalEpics, Math.ceil(distribution.totalPoints), '100%'];
+  sheet.getRange(currentRow, 1, 1, headers.length).setValues([totals]);
+  sheet.getRange(currentRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#FFC72C')
+    .setFontSize(8)
+    .setFontFamily('Comfortaa');
+  sheet.getRange(currentRow, 2, 1, 3).setHorizontalAlignment('center');
+  setRowHeightWithLimit(sheet, currentRow, 25, 70);
+
+  // Add borders
+  sheet.getRange(headerRow, 1, distribution.rows.length + 2, headers.length).setBorder(
+    true, true, true, true, false, false,
+    '#555555', SpreadsheetApp.BorderStyle.SOLID_MEDIUM
+  );
+
+  currentRow++;
+
+  // Create pie chart if requested and we have data
+  if (includeChart && distribution.rows.length > 0) {
+    try {
+      createTeamInitiativePieChart(
+        sheet,
+        dataStartRow,
+        Math.min(distribution.rows.length, 10),  // Limit to top 10 for readability
+        label,
+        6,  // Chart column (F)
+        dataStartRow - 2  // Position chart at section header row
+      );
+    } catch (e) {
+      console.error(`Error creating ${label} pie chart:`, e);
     }
+  }
+
+  return currentRow;
+}
+
+/**
+ * Calculate initiative distribution for a team
+ * @param {Array} epics - Epic issues
+ * @param {string} field - Field name to group by
+ * @returns {Object} { rows: [[name, count, points, %], ...], totalEpics, totalPoints }
+ */
+function calculateTeamInitiativeDistribution(epics, field) {
+  const distribution = {};
+  let totalPoints = 0;
+
+  epics.forEach(epic => {
+    const initiative = epic[field] || 'Not Specified';
+    const points = calculateTeamEpicPoints(epic);
+
+    if (!distribution[initiative]) {
+      distribution[initiative] = { epicCount: 0, points: 0 };
+    }
+    distribution[initiative].epicCount++;
+    distribution[initiative].points += points;
+    totalPoints += points;
   });
 
-  console.log(`Cleaned ${cleanedCount} cells in sheet ${sheetName}`);
-  return cleanedCount;
+  // Convert to sorted array (descending by points), truncate long names
+  const maxLen = 50;
+  const sorted = Object.entries(distribution)
+    .sort((a, b) => b[1].points - a[1].points)
+    .map(([name, data]) => [
+      name.length > maxLen ? name.substring(0, maxLen - 3) + '...' : name,
+      data.epicCount,
+      Math.ceil(data.points),
+      totalPoints > 0 ? Math.round((data.points / totalPoints) * 100) + '%' : '0%'
+    ]);
+
+  return {
+    rows: sorted,
+    totalEpics: epics.length,
+    totalPoints: totalPoints
+  };
 }
 
-// ===== 7. SHEET CREATION FUNCTIONS =====
-function safeGetOrCreateSheet(spreadsheet, sheetName) {
-  let sheet = spreadsheet.getSheetByName(sheetName);
+/**
+ * Calculate points for an epic (Feature Points x 10 or Story Point Estimate)
+ * @param {Object} epic - Epic object
+ * @returns {number} Calculated points
+ */
+function calculateTeamEpicPoints(epic) {
+  // Use Feature Points x 10 if available
+  if (epic.featurePoints && epic.featurePoints > 0) {
+    return epic.featurePoints * 10;
+  }
+  // Fall back to Story Point Estimate
+  if (epic.storyPointEstimate && epic.storyPointEstimate > 0) {
+    return epic.storyPointEstimate;
+  }
+  // Fall back to aggregated story points
+  return epic.storyPoints || 0;
+}
 
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet(sheetName);
+/**
+ * Create pie chart for team initiative distribution
+ * @param {Sheet} sheet - Target sheet
+ * @param {number} dataStartRow - First row of data
+ * @param {number} dataRowCount - Number of data rows
+ * @param {string} title - Chart title
+ * @param {number} chartColumn - Column to position chart
+ * @param {number} chartRow - Row to position chart
+ */
+function createTeamInitiativePieChart(sheet, dataStartRow, dataRowCount, title, chartColumn, chartRow) {
+  try {
+    const labelRange = sheet.getRange(dataStartRow, 1, dataRowCount, 1);  // Initiative names
+    const valueRange = sheet.getRange(dataStartRow, 3, dataRowCount, 1);  // Points column
+
+    const chart = sheet.newChart()
+      .setChartType(Charts.ChartType.PIE)
+      .addRange(labelRange)
+      .addRange(valueRange)
+      .setPosition(chartRow, chartColumn, 0, 0)
+      .setOption('title', title + ' by Points')
+      .setOption('width', 400)
+      .setOption('height', 280)
+      .setOption('pieSliceText', 'percentage')
+      .setOption('legend', { position: 'right', textStyle: { fontSize: 8 } })
+      .setOption('titleTextStyle', { fontSize: 10, bold: true })
+      .setOption('colors', [
+        '#1B365D', '#6B3FA0', '#FFC72C', '#4285F4', '#34A853',
+        '#EA4335', '#FBBC05', '#9AA0A6', '#5F6368', '#F28B82'
+      ])
+      .build();
+
+    sheet.insertChart(chart);
+    console.log(`Created pie chart: ${title}`);
+
+  } catch (error) {
+    console.error(`Error creating pie chart "${title}":`, error);
+  }
+}
+
+function createIterationSlottingChart(sheet, startRow, issues, scrumTeam, programIncrement, spreadsheet) {
+  console.log(`Creating Iteration Slotting chart for ${scrumTeam}`);
+
+  // Extract PI number
+  const piNumber = parseInt(programIncrement.replace('PI ', ''));
+  if (isNaN(piNumber)) {
+    console.error('Invalid PI number in programIncrement:', programIncrement);
+    return startRow;
   }
 
-  return sheet;
-}
+  // Get spreadsheet reference if not passed
+  if (!spreadsheet) {
+    spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  }
 
-function safeRemoveFilter(sheet) {
+  // Try to get capacity data from consolidated capacity sheet
+  let capacityData = null;
   try {
-    const filter = sheet.getFilter();
-    if (filter) {
-      filter.remove();
+    if (typeof getCapacityDataForTeamConsolidated === 'function') {
+      capacityData = getCapacityDataForTeamConsolidated(spreadsheet, scrumTeam);
+      if (capacityData) {
+        console.log(`Found capacity data for ${scrumTeam} in consolidated format`);
+      }
     }
   } catch (e) {
-    // No filter exists, that's okay
-  }
-}
-
-function createFilterViews(sheet, sectionRanges) {
-  const spreadsheetId = SpreadsheetApp.getActiveSpreadsheet().getId();
-  const sheetId = sheet.getSheetId();
-
-  const requests = [];
-
-  // Create filter view for LOE Exceeding Estimate section
-  if (sectionRanges.loeSection) {
-    requests.push({
-      "addFilterView": {
-        "filter": {
-          "title": "LOE Exceeding Estimate",
-          "range": {
-            "sheetId": sheetId,
-            "startRowIndex": sectionRanges.loeSection.startRow - 1,
-            "endRowIndex": sectionRanges.loeSection.endRow,
-            "startColumnIndex": 0,
-            "endColumnIndex": sectionRanges.loeSection.numColumns
-          },
-          "sortSpecs": [{
-            "dimensionIndex": 7, // Difference column
-            "sortOrder": "DESCENDING"
-          }]
-        }
-      }
-    });
+    console.log(`Error getting consolidated capacity data: ${e.message}`);
   }
 
-  // Create filter view for Allocation Mismatch section
-  if (sectionRanges.mismatchSection) {
-    requests.push({
-      "addFilterView": {
-        "filter": {
-          "title": "Allocation Mismatches",
-          "range": {
-            "sheetId": sheetId,
-            "startRowIndex": sectionRanges.mismatchSection.startRow - 1,
-            "endRowIndex": sectionRanges.mismatchSection.endRow,
-            "startColumnIndex": 0,
-            "endColumnIndex": sectionRanges.mismatchSection.numColumns
-          },
-          "sortSpecs": [{
-            "dimensionIndex": 2, // Scrum Team column
-            "sortOrder": "ASCENDING"
-          }]
-        }
-      }
-    });
+  // If no capacity data found, team won't have iteration slotting
+  if (!capacityData) {
+    console.log(`No capacity data found for team ${scrumTeam} - skipping iteration slotting`);
+    return startRow;
   }
 
-  // Create filter view for All Epics section
-  if (sectionRanges.allEpicsSection) {
-    requests.push({
-      "addFilterView": {
-        "filter": {
-          "title": "All Epics",
-          "range": {
-            "sheetId": sheetId,
-            "startRowIndex": sectionRanges.allEpicsSection.startRow - 1,
-            "endRowIndex": sectionRanges.allEpicsSection.endRow,
-            "startColumnIndex": 0,
-            "endColumnIndex": sectionRanges.allEpicsSection.numColumns
-          },
-          "sortSpecs": [{
-            "dimensionIndex": 2, // Scrum Team column
-            "sortOrder": "ASCENDING"
-          }, {
-            "dimensionIndex": 3, // Allocation column
-            "sortOrder": "ASCENDING"
-          }]
-        }
-      }
-    });
+  console.log(`Using capacity data for team ${scrumTeam}`);
+
+  // Title - fill columns A through L with purple
+  sheet.getRange(startRow, 1).setValue('Iteration Slotting');
+  sheet.getRange(startRow, 1, 1, 12).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+
+  const headerRow = startRow + 1;
+
+  // Headers
+  const headers = [
+    'Iteration', 'Baseline Capacity', 'Product Load', 'Slotted Product Load', 'Remaining for Use',
+    'Tech/Platform Load', 'Slotted Tech/Platform Load', 'Remaining for Use',
+    'Planned Quality Load', 'Slotted Planned Quality Load', 'Remaining for Use',
+    'Unplanned Work'
+  ];
+
+  sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(headerRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+
+  setRowHeightWithLimit(sheet, headerRow, 50, 70);
+
+  // Set column widths
+  for (let col = 1; col <= headers.length; col++) {
+    sheet.setColumnWidth(col, 100);
   }
 
-  // Execute all requests
-  if (requests.length > 0) {
-    try {
-      Sheets.Spreadsheets.batchUpdate({
-        "requests": requests
-      }, spreadsheetId);
-
-      console.log(`Created ${requests.length} filter views for sheet: ${sheet.getName()}`);
-    } catch (error) {
-      console.error('Error creating filter views:', error);
-      throw error;
-    }
-  }
-}
-
-// ===== 8. SUMMARY/REPORT GENERATION FUNCTIONS =====
-function createValueStreamSummaries(allIssues, programIncrement, valueStreams, targetSpreadsheet) {
-  const spreadsheet = targetSpreadsheet || SpreadsheetApp.getActiveSpreadsheet();
-
-  valueStreams.forEach(valueStream => {
-    const summarySheetName = `${programIncrement} Summary - ${valueStream}`;
-    let summarySheet;
-
-    try {
-      summarySheet = safeGetOrCreateSheet(spreadsheet, summarySheetName);
-      safeRemoveFilter(summarySheet);
-      summarySheet.clear();
-
-    } catch (error) {
-      console.error(`Error creating summary sheet for ${valueStream}:`, error);
-      return;
-    }
-
-    // Track section ranges for filter views
-    const sectionRanges = {};
-
-    // Filter issues for this specific value stream
-    const vsIssues = allIssues.filter(issue =>
-    issue.analyzedValueStream === valueStream ||
-    (issue.valueStream === valueStream && !issue.analyzedValueStream)
-    );
-
-    console.log(`Creating summary for ${valueStream}: ${vsIssues.length} total issues from all projects`);
-
-    summarySheet.getRange(1, 1).setValue(`${programIncrement} - ${valueStream} Summary (All Projects)`);
-    summarySheet.getRange(1, 1).setFontSize(16).setFontWeight('bold').setFontFamily('Comfortaa');
-
-    // Add LOE note in italics
-    summarySheet.getRange(2, 1).setValue('* LOE is a sum of all story points associated to the epic');
-    summarySheet.getRange(2, 1).setFontStyle('italic').setFontColor('#666666').setFontFamily('Comfortaa');
-
-    summarySheet.getRange(3, 1).setValue('Last Updated:');
-    summarySheet.getRange(3, 2).setValue(new Date().toLocaleString());
-    summarySheet.getRange(3, 1, 1, 2).setFontWeight('bold').setFontFamily('Comfortaa');
-
-    // Set font for entire sheet at the beginning
-    summarySheet.getRange(1, 1, summarySheet.getMaxRows(), summarySheet.getMaxColumns()).setFontFamily('Comfortaa');
-
-    const epics = vsIssues.filter(i => i.issueType === 'Epic');
-    const stories = vsIssues.filter(i => i.issueType !== 'Epic');
-    const planningItems = stories.filter(i => i.issueType === 'Story' || i.issueType === 'Bug'); // Only Stories and Bugs for planning
-
-    // Calculate tickets without story points
-    const storiesWithoutPoints = stories.filter(s => !s.storyPoints || s.storyPoints === 0);
-    const epicsWithStoriesWithoutPoints = new Set();
-
-    storiesWithoutPoints.forEach(story => {
-      const epicKey = story.parentKey || story.epicLink;
-      if (epicKey) {
-        epicsWithStoriesWithoutPoints.add(epicKey);
-      }
-    });
-
-    console.log(`${valueStream}: ${epics.length} epics, ${stories.length} stories from all projects`);
-
-    // Calculate allocation mismatches
-    const epicsWithMismatches = [];
-    epics.forEach(epic => {
-      const epicChildren = stories.filter(s =>
-        (s.parentKey === epic.key || s.epicLink === epic.key) &&
-        s.analyzedValueStream === valueStream
-      );
-      const mismatchedChildren = epicChildren.filter(child =>
-        child.allocation && epic.allocation && child.allocation !== epic.allocation
-      );
-
-      if (mismatchedChildren.length > 0) {
-        epicsWithMismatches.push({
-          epic: epic,
-          mismatchedChildren: mismatchedChildren
-        });
-      }
-    });
-
-    const scrumTeams = [...new Set(epics.map(e => e.scrumTeam || 'Unassigned'))].sort();
-
-    const teamMetrics = {};
-    scrumTeams.forEach(team => {
-      const teamStories = stories.filter(s => (s.scrumTeam || 'Unassigned') === team);
-      const teamPlanningItems = teamStories.filter(s => s.issueType === 'Story' || s.issueType === 'Bug');
-      const teamEpics = epics.filter(e => (e.scrumTeam || 'Unassigned') === team);
-      const teamEpicsWithMismatches = epicsWithMismatches.filter(item =>
-        (item.epic.scrumTeam || 'Unassigned') === team
-      );
-
-      teamMetrics[team] = {
-        stories: teamStories.length,
-        planningItems: teamPlanningItems.length,
-        epics: teamEpics.length,
-        storyPoints: teamPlanningItems.reduce((sum, s) => sum + (s.storyPoints || 0), 0), // Only Stories/Bugs
-        storyPointEstimates: teamEpics.reduce((sum, e) => sum + (e.storyPointEstimate || 0), 0),
-        loeEstimate: teamEpics.reduce((sum, e) => sum + (e.loeEstimate || 0), 0),
-        featurePoints: teamEpics.reduce((sum, e) => sum + ((e.featurePoints || 0) * 10), 0),
-        epicsExceedingEstimate: teamEpics.filter(e => e.loeEstimate > e.storyPointEstimate && e.loeEstimate > 0).length,
-        epicsWithAllocationMismatch: teamEpicsWithMismatches.length
-      };
-    });
-
-    let currentRow = 5; // Start after the LOE note
-
-    // ===== NEW: PLANNING PROGRESS GAUGES =====
-    currentRow = createPlanningProgressGauges(summarySheet, currentRow, vsIssues, epics, stories, valueStream);
-    currentRow += 2;
-
-    // ===== ALLOCATION CHART SECTION =====
-    currentRow = createAllocationChart(summarySheet, currentRow, vsIssues, scrumTeams, teamMetrics, valueStream);
-    currentRow += 2;
-
-    // Merged header for metrics - merge A & B
-    summarySheet.getRange(currentRow, 1, 1, 2).merge();
-    summarySheet.getRange(currentRow, 1).setValue('Metric');
-    summarySheet.getRange(currentRow, 3).setValue('ART Total');
-
-    // Add scrum team headers
-    scrumTeams.forEach((team, index) => {
-      summarySheet.getRange(currentRow, 4 + index).setValue(team);
-    });
-
-    // Format header row
-    summarySheet.getRange(currentRow, 1, 1, 3 + scrumTeams.length)
-      .setFontWeight('bold')
-      .setBackground('#9b7bb8')
-      .setFontColor('white')
-      .setFontFamily('Comfortaa')
-      .setFontSize(8);
-    currentRow++;
-
-    const totalStoryPoints = planningItems.reduce((sum, s) => sum + (s.storyPoints || 0), 0);
-    const totalStoryPointEstimates = epics.reduce((sum, e) => sum + (e.storyPointEstimate || 0), 0);
-    const totalLOEEstimate = epics.reduce((sum, e) => sum + (e.loeEstimate || 0), 0);
-    const totalFeaturePoints = epics.reduce((sum, e) => sum + ((e.featurePoints || 0) * 10), 0);
-    const totalEpicsExceeding = epics.filter(e => e.loeEstimate > e.storyPointEstimate && e.loeEstimate > 0).length;
-    const totalEpicsWithMismatches = epicsWithMismatches.length;
-
-    const overviewData = [
-      ['Total Epics', '', epics.length, ...scrumTeams.map(team => teamMetrics[team].epics)],
-      ['# of epics that have tickets without story points', '', epicsWithStoriesWithoutPoints.size, ...scrumTeams.map(team => {
-        // Only check Stories and Bugs for story points
-        const teamEpicsWithoutPoints = new Set();
-        storiesWithoutPoints.filter(s =>
-          (s.scrumTeam || 'Unassigned') === team &&
-          (s.issueType === 'Story' || s.issueType === 'Bug')
-        ).forEach(story => {
-          const epicKey = story.parentKey || story.epicLink;
-          if (epicKey) {
-            const epic = epics.find(e => e.key === epicKey);
-            if (epic && (epic.scrumTeam || 'Unassigned') === team) {
-              teamEpicsWithoutPoints.add(epicKey);
-            }
-          }
-        });
-        return teamEpicsWithoutPoints.size;
-      })],
-      ['Total Stories/Bugs (Planning Items)', '', planningItems.length, ...scrumTeams.map(team =>
-        teamMetrics[team].planningItems || teamMetrics[team].stories
-      )],
-      ['Total Child Issues (All Types)', '', stories.length, ...scrumTeams.map(team => teamMetrics[team].stories)],
-      ['Total Story Points', '', totalStoryPoints, ...scrumTeams.map(team => teamMetrics[team].storyPoints)],
-      ['# of planning items without story points', '', planningItems.filter(s => !s.storyPoints || s.storyPoints === 0).length, ...scrumTeams.map(team =>
-        planningItems.filter(s => (s.scrumTeam || 'Unassigned') === team && (!s.storyPoints || s.storyPoints === 0)).length
-      )],
-      ['Total Story Point Estimates', '', totalStoryPointEstimates, ...scrumTeams.map(team => teamMetrics[team].storyPointEstimates)],
-      ['Total LOE Estimate', '', totalLOEEstimate, ...scrumTeams.map(team => teamMetrics[team].loeEstimate)],
-      ['Total Feature Points (x10)', '', totalFeaturePoints, ...scrumTeams.map(team => teamMetrics[team].featurePoints)],
-      ['Epics Exceeding Estimate', '', totalEpicsExceeding, ...scrumTeams.map(team => teamMetrics[team].epicsExceedingEstimate)],
-      ['Epics with Allocation Mismatch', '', totalEpicsWithMismatches, ...scrumTeams.map(team => teamMetrics[team].epicsWithAllocationMismatch)]
-    ];
-
-    // Write data and merge cells in column A and B for each metric row
-    overviewData.forEach((rowData, index) => {
-      const rowNum = currentRow + index;
-      summarySheet.getRange(rowNum, 1, 1, rowData.length).setValues([rowData]);
-      summarySheet.getRange(rowNum, 1, 1, 2).merge();
-    });
-
-    // Set font size 8 for all overview data
-    summarySheet.getRange(currentRow, 1, overviewData.length, 3 + scrumTeams.length).setFontSize(8);
-
-    currentRow += overviewData.length;
-
-    currentRow += 2;
-    summarySheet.getRange(currentRow, 1).setValue('Color Key:');
-    summarySheet.getRange(currentRow, 1).setFontWeight('bold').setFontFamily('Comfortaa');
-    currentRow++;
-
-    const colorKeyData = [
-      ['Red background', 'LOE Estimate exceeds Story Point Estimate'],
-      ['Green background', 'LOE Estimate is 5+ points under Story Point Estimate'],
-      ['Yellow background', 'Epic appears in "Epics: Variance between Story Point Estimates and LOE Estimates" list']
-    ];
-
-    colorKeyData.forEach((keyRow, index) => {
-      summarySheet.getRange(currentRow + index, 1).setValue(keyRow[0]);
-      summarySheet.getRange(currentRow + index, 2).setValue(keyRow[1]);
-
-      if (keyRow[0].includes('Red')) {
-        summarySheet.getRange(currentRow + index, 1).setBackground('#ffcccc');
-      } else if (keyRow[0].includes('Green')) {
-        summarySheet.getRange(currentRow + index, 1).setBackground('#ccffcc');
-      } else if (keyRow[0].includes('Yellow')) {
-        summarySheet.getRange(currentRow + index, 1).setBackground('#fff3cd');
-      }
-    });
-    currentRow += colorKeyData.length;
-
-    // FIRST: Epics where LOE Estimate exceeds Story Point Estimate (RENAMED)
-    const problematicEpics = epics.filter(epic =>
-      epic.loeEstimate > epic.storyPointEstimate && epic.loeEstimate > 0
-    );
-
-    const underEstimatedEpics = epics.filter(epic =>
-      epic.storyPointEstimate - epic.loeEstimate >= 5
-    );
-
-    const sortEpics = (epicList) => {
-      return epicList.sort((a, b) => {
-        const teamCompare = (a.scrumTeam || 'Unassigned').localeCompare(b.scrumTeam || 'Unassigned');
-        if (teamCompare !== 0) return teamCompare;
-        return (a.allocation || '').localeCompare(b.allocation || '');
-      });
-    };
-
-    currentRow += 2;
-    summarySheet.getRange(currentRow, 1).setValue('Epics: Variance between Story Point Estimates and LOE Estimates');
-    summarySheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#fff3cd').setFontFamily('Comfortaa');
-    currentRow += 2;
-
-    if (problematicEpics.length > 0 || underEstimatedEpics.length > 0) {
-      const allProblematicEpics = [...new Set([...problematicEpics, ...underEstimatedEpics])];
-      const sortedProblematicEpics = sortEpics(allProblematicEpics);
-
-      const epicHeaders = ['Key', 'Summary', 'Scrum Team', 'Allocation', 'Status', 'Story Point Estimate', 'LOE Estimate', 'Difference', 'Feature Points (x10)'];
-      summarySheet.getRange(currentRow, 1, 1, epicHeaders.length).setValues([epicHeaders]);
-      summarySheet.getRange(currentRow, 1, 1, epicHeaders.length)
-        .setFontWeight('bold')
-        .setBackground('#9b7bb8')
-        .setFontColor('white')
-        .setFontFamily('Comfortaa')
-        .setFontSize(8);
-
-      // Track the LOE section range for filter view
-      const loeHeaderRow = currentRow;
-      currentRow++;
-
-      const epicData = sortedProblematicEpics.map(epic => [
-        epic.key,
-        epic.summary.substring(0, 60) + (epic.summary.length > 60 ? '...' : ''),
-        epic.scrumTeam || 'Unassigned',
-        epic.allocation || '',
-        epic.status,
-        epic.storyPointEstimate || 0,
-        epic.loeEstimate || 0,
-        (epic.loeEstimate || 0) - (epic.storyPointEstimate || 0),
-        (epic.featurePoints || 0) * 10
-      ]);
-
-      const epicDataRange = summarySheet.getRange(currentRow, 1, epicData.length, epicHeaders.length);
-      epicDataRange.setValues(epicData);
-      epicDataRange.setFontSize(8);
-
-      // Apply hyperlinks to epic keys
-      const epicKeys = sortedProblematicEpics.map(epic => epic.key);
-      applyJiraHyperlinks(summarySheet, currentRow, 1, epicKeys);
-
-      // Store range for filter view
-      sectionRanges.loeSection = {
-        startRow: loeHeaderRow,
-        endRow: currentRow + epicData.length - 1,
-        numColumns: epicHeaders.length
-      };
-
-      const diffColumn = 8;
-      for (let i = 0; i < epicData.length; i++) {
-        const diff = epicData[i][7];
-        if (diff > 0) {
-          summarySheet.getRange(currentRow + i, diffColumn)
-            .setBackground('#ffcccc')
-            .setFontWeight('bold');
-        } else if (diff <= -5) {
-          summarySheet.getRange(currentRow + i, diffColumn)
-            .setBackground('#ccffcc')
-            .setFontWeight('bold');
-        }
-      }
-
-      currentRow += epicData.length;
-    } else {
-      summarySheet.getRange(currentRow, 1).setValue('No epics found with variance between estimates');
-      summarySheet.getRange(currentRow, 1).setFontStyle('italic').setFontColor('#666666');
-      currentRow++;
-    }
-
-    // SECOND: Epics with allocation mismatches
-    if (epicsWithMismatches.length > 0) {
-      currentRow += 2;
-      summarySheet.getRange(currentRow, 1).setValue('Epics with Allocation Mismatches');
-      summarySheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#ffe6e6').setFontFamily('Comfortaa');
-      currentRow += 2;
-
-      // Determine the maximum number of mismatched children
-      let maxMismatchedChildren = 0;
-      epicsWithMismatches.forEach(item => {
-        if (item.mismatchedChildren.length > maxMismatchedChildren) {
-          maxMismatchedChildren = item.mismatchedChildren.length;
-        }
-      });
-
-      // Create headers with individual columns for each mismatched child
-      const baseHeaders = ['Key', 'Summary', 'Scrum Team', 'Allocation', 'Status', 'Feature Points (x10)'];
-      const childHeaders = [];
-      for (let i = 1; i <= maxMismatchedChildren; i++) {
-        childHeaders.push(`Mismatch ${i}`);
-      }
-      const mismatchHeaders = [...baseHeaders, ...childHeaders];
-
-      summarySheet.getRange(currentRow, 1, 1, mismatchHeaders.length).setValues([mismatchHeaders]);
-      summarySheet.getRange(currentRow, 1, 1, mismatchHeaders.length)
-        .setFontWeight('bold')
-        .setBackground('#9b7bb8')
-        .setFontColor('white')
-        .setFontFamily('Comfortaa')
-        .setFontSize(8);
-
-      // Track the mismatch section range for filter view
-      const mismatchHeaderRow = currentRow;
-      currentRow++;
-
-      const mismatchData = epicsWithMismatches.map(item => {
-        const baseData = [
-          item.epic.key,
-          item.epic.summary.substring(0, 60) + (item.epic.summary.length > 60 ? '...' : ''),
-          item.epic.scrumTeam || 'Unassigned',
-          item.epic.allocation || '',
-          item.epic.status,
-          (item.epic.featurePoints || 0) * 10
-        ];
-
-        // Add mismatched children, one per column
-        const childData = [];
-        for (let i = 0; i < maxMismatchedChildren; i++) {
-          if (i < item.mismatchedChildren.length) {
-            const child = item.mismatchedChildren[i];
-            childData.push(child.key);
-          } else {
-            childData.push('');
-          }
-        }
-
-        return [...baseData, ...childData];
-      });
-
-      if (mismatchData.length > 0) {
-        const mismatchRange = summarySheet.getRange(currentRow, 1, mismatchData.length, mismatchHeaders.length);
-        mismatchRange.setValues(mismatchData);
-        mismatchRange.setFontSize(8);
-
-        // Apply hyperlinks
-        const epicKeys = epicsWithMismatches.map(item => item.epic.key);
-        applyJiraHyperlinks(summarySheet, currentRow, 1, epicKeys);
-
-        // Apply hyperlinks to mismatched children columns
-        for (let col = 0; col < maxMismatchedChildren; col++) {
-          const childKeys = epicsWithMismatches.map(item => {
-            if (col < item.mismatchedChildren.length) {
-              const child = item.mismatchedChildren[col];
-              return `${child.key} (${child.allocation || 'None'})`;
-            }
-            return '';
-          });
-
-          // Create formulas for children with allocation info
-          const childFormulas = childKeys.map(keyWithAlloc => {
-            if (!keyWithAlloc) return [''];
-            const match = keyWithAlloc.match(/^(\w+-\d+)\s*\((.+)\)$/);
-            if (match) {
-              const key = match[1];
-              const allocation = match[2];
-              return [`=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${key}","${key} (${allocation})")`];
-            }
-            return [keyWithAlloc];
-          });
-
-          if (childFormulas.some(f => f[0] !== '')) {
-            summarySheet.getRange(currentRow, 7 + col, mismatchData.length, 1).setFormulas(childFormulas);
-          }
-        }
-
-        // Store range for filter view
-        sectionRanges.mismatchSection = {
-          startRow: mismatchHeaderRow,
-          endRow: currentRow + mismatchData.length - 1,
-          numColumns: mismatchHeaders.length
-        };
-
-        currentRow += mismatchData.length;
+  // Calculate slotted values from PI sheet data
+  const slottedData = calculateSlottedData(issues, piNumber, scrumTeam);
+
+  // Data rows
+  const iterations = [
+    'Iteration 1', 'Iteration 2', 'Iteration 3', 'Iteration 4',
+    'Iteration 5', 'Iteration 6', 'Total (5 iterations)', 'Total (6 iterations)'
+  ];
+
+  const dataStartRow = headerRow + 1;
+
+  iterations.forEach((iteration, index) => {
+    const currentRow = dataStartRow + index;
+    const iterationNum = index + 1;
+
+    // Alternate row colors for regular iterations
+    if (iterationNum <= 6) {
+      if (iterationNum % 2 === 0) {
+        sheet.getRange(currentRow, 1, 1, headers.length).setBackground('#f5f5f5');
       }
     }
 
-    // ALL EPICS SECTION - WITH COST OF DELAY FIXES
-    currentRow += 2;
-    summarySheet.getRange(currentRow, 1).setValue('All Epics');
-    summarySheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#e8f0fe').setFontFamily('Comfortaa');
-    currentRow += 2;
+    // Iteration column
+    sheet.getRange(currentRow, 1).setValue(iteration);
+    sheet.getRange(currentRow, 1).setWrap(true);
 
-    if (epics.length > 0) {
-      // Custom sort function for All Epics - NOW INCLUDES COST OF DELAY SORTING
-      const sortedEpics = epics.sort((a, b) => {
-        // First sort by Cost of Delay (highest first)
-        const costA = parseFloat(a.costOfDelay) || 0;
-        const costB = parseFloat(b.costOfDelay) || 0;
-        if (costA !== costB) {
-          return costB - costA; // Descending order (highest first)
-        }
+    if (iterationNum <= 6) {
+      // Regular iterations - use values from capacityData
+      const iterData = capacityData.byIteration ? capacityData.byIteration[iterationNum] : null;
 
-        // Then check if allocation is "TEAM-PI-Planning"
-        const aIsTeamPI = (a.allocation || '').includes('TEAM-PI-Planning');
-        const bIsTeamPI = (b.allocation || '').includes('TEAM-PI-Planning');
+      // Baseline Capacity - use base capacity before FF, distributed by iteration
+      // Note: The consolidated format stores total base capacity, so we estimate per iteration
+      const baseCapPerIter = Math.round((capacityData.baseCapacityBeforeFF || 0) / 6);
+      sheet.getRange(currentRow, 2).setValue(baseCapPerIter);
 
-        if (aIsTeamPI && !bIsTeamPI) return -1;
-        if (!aIsTeamPI && bIsTeamPI) return 1;
+      if (iterData) {
+        // Product Load (Feature + Compliance)
+        const productLoad = Math.round((iterData.productFeature || 0) + (iterData.productCompliance || 0));
+        sheet.getRange(currentRow, 3).setValue(productLoad);
 
-        // Then sort by allocation
-        const allocCompare = (a.allocation || '').localeCompare(b.allocation || '');
-        if (allocCompare !== 0) return allocCompare;
+        // Tech/Platform Load
+        sheet.getRange(currentRow, 6).setValue(Math.round(iterData.techPlatform || 0));
 
-        // Finally sort by status
-        return (a.status || '').localeCompare(b.status || '');
-      });
+        // Planned Quality Load
+        sheet.getRange(currentRow, 9).setValue(Math.round(iterData.quality || 0));
 
-      const allEpicHeaders = ['Key', 'Summary', 'Value Stream', 'Allocation', 'Status', 'Story Point Estimate', 'LOE Estimate', 'Feature Points (x10)', 'Cost of Delay'];
-      summarySheet.getRange(currentRow, 1, 1, allEpicHeaders.length).setValues([allEpicHeaders]);
-      summarySheet.getRange(currentRow, 1, 1, allEpicHeaders.length)
-        .setFontWeight('bold')
-        .setBackground('#9b7bb8')
-        .setFontColor('white')
-        .setFontFamily('Comfortaa')
-        .setFontSize(8);
-
-      // Track the all epics section range for filter view
-      const allEpicsHeaderRow = currentRow;
-      currentRow++;
-
-      const allEpicData = sortedEpics.map(epic => [
-        epic.key,
-        epic.summary.substring(0, 60) + (epic.summary.length > 60 ? '...' : ''),
-        epic.scrumTeam || 'Unassigned',
-        epic.allocation || '',
-        epic.status,
-        epic.storyPointEstimate || 0,
-        epic.loeEstimate || 0,
-        (epic.featurePoints || 0) * 10,
-        epic.costOfDelay || 0
-      ]);
-
-      const allEpicRange = summarySheet.getRange(currentRow, 1, allEpicData.length, allEpicHeaders.length);
-      allEpicRange.setValues(allEpicData);
-      allEpicRange.setFontSize(8);
-
-      // FORMAT COST OF DELAY COLUMN AS NUMBER
-      if (allEpicData.length > 0) {
-        const costOfDelayColumn = 9; // Cost of Delay is the 9th column
-        const costOfDelayRange = summarySheet.getRange(currentRow, costOfDelayColumn, allEpicData.length, 1);
-        costOfDelayRange.setNumberFormat("#,##0");
+        // Unplanned Work (KLO)
+        sheet.getRange(currentRow, 12).setValue(Math.round(iterData.klo || 0));
+      } else {
+        // Fallback to allocation totals distributed evenly if no iteration data
+        const productLoad = Math.round((capacityData.productCapacity || 0) / 6);
+        sheet.getRange(currentRow, 3).setValue(productLoad);
+        sheet.getRange(currentRow, 6).setValue(Math.round((capacityData.allocations?.techPlatform || 0) / 6));
+        sheet.getRange(currentRow, 9).setValue(Math.round((capacityData.allocations?.quality || 0) / 6));
+        sheet.getRange(currentRow, 12).setValue(Math.round((capacityData.allocations?.klo || 0) / 6));
       }
 
-      // Apply hyperlinks to all epic keys
-      const allEpicKeys = sortedEpics.map(epic => epic.key);
-      applyJiraHyperlinks(summarySheet, currentRow, 1, allEpicKeys);
+      // Slotted Product Load
+      sheet.getRange(currentRow, 4).setValue(Math.round(slottedData.product[iterationNum] || 0));
 
-      // Store range for filter view
-      sectionRanges.allEpicsSection = {
-        startRow: allEpicsHeaderRow,
-        endRow: currentRow + allEpicData.length - 1,
-        numColumns: allEpicHeaders.length
-      };
+      // Remaining (Product)
+      sheet.getRange(currentRow, 5).setFormula(`=C${currentRow}-D${currentRow}`);
 
-      const problematicKeys = new Set([...problematicEpics.map(e => e.key), ...underEstimatedEpics.map(e => e.key)]);
+      // Slotted Tech/Platform Load
+      sheet.getRange(currentRow, 7).setValue(Math.round(slottedData.tech[iterationNum] || 0));
 
-      for (let i = 0; i < allEpicData.length; i++) {
-        const epicKey = allEpicData[i][0];
-        if (problematicKeys.has(epicKey)) {
-          summarySheet.getRange(currentRow + i, 1, 1, allEpicHeaders.length)
-            .setBackground('#fff3cd');
-        }
-      }
-    }
+      // Remaining (Tech)
+      sheet.getRange(currentRow, 8).setFormula(`=F${currentRow}-G${currentRow}`);
 
-    // Column widths
-    summarySheet.setColumnWidth(1, 120);  // Key
-    summarySheet.setColumnWidth(2, 300);  // Summary
+      // Slotted Planned Quality Load
+      sheet.getRange(currentRow, 10).setValue(Math.round(slottedData.quality[iterationNum] || 0));
 
-    // Only set mismatch column widths if there were allocation mismatches
-    if (epicsWithMismatches.length > 0) {
-      // Calculate max mismatched children for column width setting
-      let maxMismatchedChildren = 0;
-      epicsWithMismatches.forEach(item => {
-        if (item.mismatchedChildren.length > maxMismatchedChildren) {
-          maxMismatchedChildren = item.mismatchedChildren.length;
-        }
-      });
+      // Remaining (Quality)
+      sheet.getRange(currentRow, 11).setFormula(`=I${currentRow}-J${currentRow}`);
 
-      // Keep mismatch columns at standard key width
-      for (let col = 7; col <= 6 + maxMismatchedChildren; col++) {
-        summarySheet.setColumnWidth(col, 120);
-      }
-    }
+      // Unplanned Work column always has light grey background
+      sheet.getRange(currentRow, 12).setBackground('#f5f5f5');
 
-    summarySheet.getRange(1, 2, summarySheet.getMaxRows(), 1).setWrap(true);
+    } else if (iterationNum === 7) {
+      // Total (5 iterations)
+      sheet.getRange(currentRow, 2).setFormula(`=SUM(B${dataStartRow}:B${dataStartRow + 4})`);
+      sheet.getRange(currentRow, 3).setFormula(`=SUM(C${dataStartRow}:C${dataStartRow + 4})`);
+      sheet.getRange(currentRow, 4).setValue(Math.round(slottedData.product.total4 || 0));
+      sheet.getRange(currentRow, 5).setFormula(`=C${currentRow}-D${currentRow}`);
+      sheet.getRange(currentRow, 6).setFormula(`=SUM(F${dataStartRow}:F${dataStartRow + 4})`);
+      sheet.getRange(currentRow, 7).setValue(Math.round(slottedData.tech.total4 || 0));
+      sheet.getRange(currentRow, 8).setFormula(`=F${currentRow}-G${currentRow}`);
+      sheet.getRange(currentRow, 9).setFormula(`=SUM(I${dataStartRow}:I${dataStartRow + 4})`);
+      sheet.getRange(currentRow, 10).setValue(Math.round(slottedData.quality.total4 || 0));
+      sheet.getRange(currentRow, 11).setFormula(`=I${currentRow}-J${currentRow}`);
+      sheet.getRange(currentRow, 12).setFormula(`=SUM(L${dataStartRow}:L${dataStartRow + 4})`);
 
-    for (let col = 3; col <= 5; col++) {
-      summarySheet.autoResizeColumn(col);
-    }
+      // Bold and darker grey background for totals
+      sheet.getRange(currentRow, 1, 1, headers.length).setFontWeight('bold');
+      sheet.getRange(currentRow, 1, 1, headers.length).setBackground('#e0e0e0');
+      sheet.getRange(currentRow, 12).setBackground('#f5f5f5');
 
-    // Freeze rows and columns at the very end, after all merging is complete
-    summarySheet.setFrozenRows(5);
-    summarySheet.setFrozenColumns(2);
+    } else if (iterationNum === 8) {
+      // Total (6 iterations)
+      sheet.getRange(currentRow, 2).setFormula(`=SUM(B${dataStartRow}:B${dataStartRow + 5})`);
+      sheet.getRange(currentRow, 3).setFormula(`=SUM(C${dataStartRow}:C${dataStartRow + 5})`);
+      sheet.getRange(currentRow, 4).setValue(Math.round(slottedData.product.total6 || 0));
+      sheet.getRange(currentRow, 5).setFormula(`=C${currentRow}-D${currentRow}`);
+      sheet.getRange(currentRow, 6).setFormula(`=SUM(F${dataStartRow}:F${dataStartRow + 5})`);
+      sheet.getRange(currentRow, 7).setValue(Math.round(slottedData.tech.total6 || 0));
+      sheet.getRange(currentRow, 8).setFormula(`=F${currentRow}-G${currentRow}`);
+      sheet.getRange(currentRow, 9).setFormula(`=SUM(I${dataStartRow}:I${dataStartRow + 5})`);
+      sheet.getRange(currentRow, 10).setValue(Math.round(slottedData.quality.total6 || 0));
+      sheet.getRange(currentRow, 11).setFormula(`=I${currentRow}-J${currentRow}`);
+      sheet.getRange(currentRow, 12).setFormula(`=SUM(L${dataStartRow}:L${dataStartRow + 5})`);
 
-    // Create filter views for each section
-    try {
-      createFilterViews(summarySheet, sectionRanges);
-    } catch (error) {
-      console.log('Could not create filter views:', error);
-      console.log('Note: Filter views require the Google Sheets API to be enabled in your project.');
+      // Bold and darker grey background for totals
+      sheet.getRange(currentRow, 1, 1, headers.length).setFontWeight('bold');
+      sheet.getRange(currentRow, 1, 1, headers.length).setBackground('#e0e0e0');
+      sheet.getRange(currentRow, 12).setBackground('#f5f5f5');
     }
   });
-}
 
-function createValueStreamSummaryEnhanced(allIssues, programIncrement, valueStream, targetSpreadsheet) {
-  // This is an alias for the main function - you can redirect to the original
-  createValueStreamSummaries(allIssues, programIncrement, [valueStream], targetSpreadsheet);
-}
+  // Add thick border after iteration 4 for PI 12, after iteration 5 for others
+  const borderAfterRow = piNumber === 12 ? dataStartRow + 3 : dataStartRow + 4;
+  sheet.getRange(borderAfterRow + 1, 1, 1, headers.length).setBorder(
+    true, false, false, false, false, false,
+    '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
 
-function createScrumTeamSummary(allIssues, programIncrement, scrumTeam, targetSpreadsheet) {
-  const spreadsheet = targetSpreadsheet || SpreadsheetApp.getActiveSpreadsheet();
+  // Add border around totals rows
+  sheet.getRange(dataStartRow + 6, 1, 2, headers.length).setBorder(
+    true, true, true, true, false, false,
+    '#666666', SpreadsheetApp.BorderStyle.SOLID_MEDIUM
+  );
 
-  try {
-    const summarySheetName = `${programIncrement} - ${scrumTeam} Summary`;
-    let summarySheet;
+  // Format data area
+  sheet.getRange(dataStartRow, 1, iterations.length, headers.length).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+  sheet.getRange(dataStartRow, 2, iterations.length, headers.length - 1).setHorizontalAlignment('center');
 
-    try {
-      summarySheet = safeGetOrCreateSheet(spreadsheet, summarySheetName);
-      safeRemoveFilter(summarySheet);
-      summarySheet.clear();
-    } catch (error) {
-      console.error(`Error creating summary sheet for ${scrumTeam}:`, error);
-      return {
-        success: false,
-        team: scrumTeam,
-        error: `Failed to create sheet: ${error.toString()}`
-      };
+  // Set standard row heights
+  for (let i = 0; i < iterations.length; i++) {
+    setRowHeightWithLimit(sheet, dataStartRow + i, 25, 70);
+  }
+
+  // Add dark grey borders around specific column groups
+  // C10:E18 (Product columns)
+  sheet.getRange(dataStartRow - 1, 3, 9, 3).setBorder(
+    true, true, true, true, false, false,
+    '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // F10:H18 (Tech columns)
+  sheet.getRange(dataStartRow - 1, 6, 9, 3).setBorder(
+    true, true, true, true, false, false,
+    '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // I10:K18 (Quality columns)
+  sheet.getRange(dataStartRow - 1, 9, 9, 3).setBorder(
+    true, true, true, true, false, false,
+    '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // L10:L18 (Unplanned Work column)
+  sheet.getRange(dataStartRow - 1, 12, 9, 1).setBorder(
+    true, true, true, true, false, false,
+    '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // Apply conditional formatting to Remaining columns AFTER row coloring
+  SpreadsheetApp.flush();
+
+  for (let i = 0; i < iterations.length; i++) {
+    const row = dataStartRow + i;
+
+    // Product Remaining (column 5 = column E)
+    const productRemaining = sheet.getRange(row, 5).getValue();
+    if (typeof productRemaining === 'number') {
+      sheet.getRange(row, 5).setBackground(productRemaining >= 0 ? '#ccffcc' : '#ffcccc');
     }
 
-    // Filter issues for this specific scrum team
+    // Tech Remaining (column 8 = column H)
+    const techRemaining = sheet.getRange(row, 8).getValue();
+    if (typeof techRemaining === 'number') {
+      sheet.getRange(row, 8).setBackground(techRemaining >= 0 ? '#ccffcc' : '#ffcccc');
+    }
+
+    // Quality Remaining (column 11 = column K)
+    const qualityRemaining = sheet.getRange(row, 11).getValue();
+    if (typeof qualityRemaining === 'number') {
+      sheet.getRange(row, 11).setBackground(qualityRemaining >= 0 ? '#ccffcc' : '#ffcccc');
+    }
+
+    // Re-apply light grey to Unplanned Work column
+    sheet.getRange(row, 12).setBackground('#f5f5f5');
+  }
+
+  return dataStartRow + iterations.length + 2;
+}
+// ===== MAIN ORCHESTRATOR FUNCTIONS =====
+function createScrumTeamSummary(allIssues, programIncrement, scrumTeam, targetSpreadsheet, sourceSpreadsheet) {
+  try {
+    console.log(`Creating summary for team: ${scrumTeam}`);
+
+    // Filter issues for this team
     const teamIssues = allIssues.filter(issue =>
       (issue.scrumTeam || 'Unassigned') === scrumTeam
     );
 
     if (teamIssues.length === 0) {
-      console.log(`No data found for team: ${scrumTeam}`);
       return {
         success: false,
         team: scrumTeam,
-        error: 'No data found for this team'
+        error: `No data found for team ${scrumTeam}`
       };
     }
 
-    console.log(`Creating summary for ${scrumTeam}: ${teamIssues.length} total issues`);
+    // Get or create the summary sheet
+    const spreadsheet = targetSpreadsheet || SpreadsheetApp.getActiveSpreadsheet();
+    // Use source spreadsheet for capacity data if provided
+    const capacitySpreadsheet = sourceSpreadsheet || spreadsheet;
 
-    // Track section ranges for filter views
-    const sectionRanges = {};
+    const sheetName = `${programIncrement} - ${scrumTeam} Summary`;
+    let sheet = spreadsheet.getSheetByName(sheetName);
 
-    summarySheet.getRange(1, 1).setValue(`${programIncrement} - ${scrumTeam} Team Summary`);
-    summarySheet.getRange(1, 1).setFontSize(16).setFontWeight('bold').setFontFamily('Comfortaa');
+    if (sheet) {
+      // Remove existing charts first (sheet.clear() doesn't remove charts)
+      const existingCharts = sheet.getCharts();
+      existingCharts.forEach(chart => {
+        sheet.removeChart(chart);
+      });
+      console.log(`Removed ${existingCharts.length} existing charts from ${sheetName}`);
 
-    // Add LOE note in italics
-    summarySheet.getRange(2, 1).setValue('* LOE is a sum of all story points associated to the epic');
-    summarySheet.getRange(2, 1).setFontStyle('italic').setFontColor('#666666').setFontFamily('Comfortaa');
+      // Clear existing content
+      sheet.clear();
+    } else {
+      // Create new sheet
+      sheet = spreadsheet.insertSheet(sheetName);
+    }
 
-    summarySheet.getRange(3, 1).setValue('Last Updated:');
-    summarySheet.getRange(3, 2).setValue(new Date().toLocaleString());
-    summarySheet.getRange(3, 1, 1, 2).setFontWeight('bold').setFontFamily('Comfortaa');
+    // Clear all existing notes from the sheet more thoroughly
+    sheet.clearNotes();
 
-    // Set font for entire sheet at the beginning
-    summarySheet.getRange(1, 1, summarySheet.getMaxRows(), summarySheet.getMaxColumns()).setFontFamily('Comfortaa');
+    // Set up the sheet
+    let currentRow = 1;
 
+    // Add title
+    sheet.getRange(currentRow, 1).setValue(`${programIncrement} - ${scrumTeam} Summary`);
+    sheet.getRange(currentRow, 1).setFontSize(16).setFontWeight('bold').setFontFamily('Comfortaa');
+    setRowHeightWithLimit(sheet, currentRow, 30, 70);
+    currentRow++;
+
+    // Add last refreshed timestamp
+    const now = new Date();
+    const formattedDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    sheet.getRange(currentRow, 1).setValue(`Last Refreshed: ${formattedDate}`);
+    sheet.getRange(currentRow, 1).setFontSize(8).setFontStyle('italic').setFontFamily('Comfortaa');
+    setRowHeightWithLimit(sheet, currentRow, 20, 70);
+    currentRow++;
+
+    // Add note about conditional sections
+    sheet.getRange(currentRow, 1).setValue('Note: Some sections will only appear when issues are detected (e.g., allocation mismatches, fix version issues)');
+    sheet.getRange(currentRow, 1).setFontSize(8).setFontStyle('italic').setFontColor('#666666').setFontFamily('Comfortaa');
+    setRowHeightWithLimit(sheet, currentRow, 20, 70);
+    currentRow += 2;
+
+    // Filter epics and stories for this team
     const epics = teamIssues.filter(i => i.issueType === 'Epic');
     const stories = teamIssues.filter(i => i.issueType !== 'Epic');
 
-    // Calculate tickets without story points
-    const storiesWithoutPoints = stories.filter(s => !s.storyPoints || s.storyPoints === 0);
-    const epicsWithStoriesWithoutPoints = new Set();
+    // CHANGED ORDER: Planning Progress FIRST
+    // Calculate total story points for the gauge
+    const totalStoryPoints = calculateTotalStoryPoints(teamIssues, scrumTeam);
 
-    storiesWithoutPoints.forEach(story => {
-      const epicKey = story.parentKey || story.epicLink;
-      if (epicKey) {
-        epicsWithStoriesWithoutPoints.add(epicKey);
-      }
-    });
-
-    console.log(`${scrumTeam}: ${epics.length} epics, ${stories.length} stories`);
-
-    // Calculate allocation mismatches for metrics
-    const epicsWithMismatches = [];
-    epics.forEach(epic => {
-      const epicChildren = stories.filter(s =>
-        (s.parentKey === epic.key || s.epicLink === epic.key)
-      );
-      const mismatchedChildren = epicChildren.filter(child =>
-        child.allocation && epic.allocation && child.allocation !== epic.allocation
-      );
-
-      if (mismatchedChildren.length > 0) {
-        epicsWithMismatches.push({
-          epic: epic,
-          mismatchedChildren: mismatchedChildren
-        });
-      }
-    });
-
-    // Get unique value streams for this team
-    const teamValueStreams = [...new Set(teamIssues.map(i => i.valueStream || 'Unknown'))].sort();
-
-    let currentRow = 5; // Start after the LOE note
-
-    // ===== PLANNING PROGRESS GAUGES (Team-specific) =====
-    currentRow = createTeamPlanningProgressGauges(summarySheet, currentRow, teamIssues, epics, stories, scrumTeam);
+    // Add Planning Progress section FIRST - pass capacitySpreadsheet for capacity lookups
+    currentRow = createTeamPlanningProgressGauges(sheet, currentRow, teamIssues, epics, stories, scrumTeam, programIncrement, totalStoryPoints, capacitySpreadsheet);
     currentRow += 2;
 
-    // ===== ALLOCATION CHART SECTION (Team-specific) =====
-    currentRow = createTeamAllocationChart(summarySheet, currentRow, teamIssues, scrumTeam);
+    // Add Planned Capacity Distribution chart (from capacity planning sheet)
+    currentRow = createPlannedCapacityDistributionChart(sheet, currentRow, scrumTeam, capacitySpreadsheet);
     currentRow += 2;
 
-    // Team Metrics Table
-    summarySheet.getRange(currentRow, 1, 1, 2).merge();
-    summarySheet.getRange(currentRow, 1).setValue('Metric');
-    summarySheet.getRange(currentRow, 3).setValue('Value');
-
-    // Format header row
-    summarySheet.getRange(currentRow, 1, 1, 3)
-      .setFontWeight('bold')
-      .setBackground('#9b7bb8')
-      .setFontColor('white')
-      .setFontFamily('Comfortaa')
-      .setFontSize(8);
-    currentRow++;
-
-    const totalStoryPoints = stories.reduce((sum, s) => sum + (s.storyPoints || 0), 0);
-    const totalStoryPointEstimates = epics.reduce((sum, e) => sum + (e.storyPointEstimate || 0), 0);
-    const totalLOEEstimate = epics.reduce((sum, e) => sum + (e.loeEstimate || 0), 0);
-    const totalFeaturePoints = epics.reduce((sum, e) => sum + ((e.featurePoints || 0) * 10), 0);
-    const totalEpicsExceeding = epics.filter(e => e.loeEstimate > e.storyPointEstimate && e.loeEstimate > 0).length;
-    const totalEpicsWithMismatches = epicsWithMismatches.length;
-
-    const overviewData = [
-      ['Total Epics', '', epics.length],
-      ['# of epics that have tickets without story points', '', epicsWithStoriesWithoutPoints.size],
-      ['Total Stories/Tasks', '', stories.length],
-      ['Total Story Points', '', totalStoryPoints],
-      ['# of tickets without story points', '', storiesWithoutPoints.length],
-      ['Total Story Point Estimates', '', totalStoryPointEstimates],
-      ['Total LOE Estimate', '', totalLOEEstimate],
-      ['Total Feature Points (x10)', '', totalFeaturePoints],
-      ['Epics Exceeding Estimate', '', totalEpicsExceeding],
-      ['Epics with Allocation Mismatch', '', totalEpicsWithMismatches],
-      ['Value Streams', '', teamValueStreams.join(', ')]
-    ];
-
-    // Write data and merge cells in column A and B for each metric row
-    overviewData.forEach((rowData, index) => {
-      const rowNum = currentRow + index;
-      summarySheet.getRange(rowNum, 1, 1, rowData.length).setValues([rowData]);
-      summarySheet.getRange(rowNum, 1, 1, 2).merge();
-    });
-
-    // Set font size 8 for all overview data
-    summarySheet.getRange(currentRow, 1, overviewData.length, 3).setFontSize(8);
-
-    currentRow += overviewData.length;
-
-    // Color Key
-    currentRow += 2;
-    summarySheet.getRange(currentRow, 1).setValue('Color Key:');
-    summarySheet.getRange(currentRow, 1).setFontWeight('bold').setFontFamily('Comfortaa');
-    currentRow++;
-
-    const colorKeyData = [
-      ['Red background', 'LOE Estimate exceeds Story Point Estimate'],
-      ['Green background', 'LOE Estimate is 5+ points under Story Point Estimate'],
-      ['Yellow background', 'Epic appears in "Epics: Variance between Story Point Estimates and LOE Estimates" list']
-    ];
-
-    colorKeyData.forEach((keyRow, index) => {
-      summarySheet.getRange(currentRow + index, 1).setValue(keyRow[0]);
-      summarySheet.getRange(currentRow + index, 2).setValue(keyRow[1]);
-
-      if (keyRow[0].includes('Red')) {
-        summarySheet.getRange(currentRow + index, 1).setBackground('#ffcccc');
-      } else if (keyRow[0].includes('Green')) {
-        summarySheet.getRange(currentRow + index, 1).setBackground('#ccffcc');
-      } else if (keyRow[0].includes('Yellow')) {
-        summarySheet.getRange(currentRow + index, 1).setBackground('#fff3cd');
-      }
-    });
-    currentRow += colorKeyData.length;
-
-    // FIRST: Epics where LOE Estimate exceeds Story Point Estimate
-    const problematicEpics = epics.filter(epic =>
-      epic.loeEstimate > epic.storyPointEstimate && epic.loeEstimate > 0
-    );
-
-    const underEstimatedEpics = epics.filter(epic =>
-      epic.storyPointEstimate - epic.loeEstimate >= 5
-    );
-
-    const sortEpics = (epicList) => {
-      return epicList.sort((a, b) => {
-        const allocCompare = (a.allocation || '').localeCompare(b.allocation || '');
-        if (allocCompare !== 0) return allocCompare;
-        return (a.valueStream || '').localeCompare(b.valueStream || '');
-      });
-    };
-
-    currentRow += 2;
-    summarySheet.getRange(currentRow, 1).setValue('Epics: Variance between Story Point Estimates and LOE Estimates');
-    summarySheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#fff3cd').setFontFamily('Comfortaa');
-    currentRow++;
-
-    // Add note under title
-    summarySheet.getRange(currentRow, 1).setValue('Note:');
-    summarySheet.getRange(currentRow, 1).setFontWeight('bold').setFontStyle('italic').setFontSize(10);
-    currentRow++;
-    summarySheet.getRange(currentRow, 1).setValue('• PLANNED = Feature Points calculated at the Epic level');
-    summarySheet.getRange(currentRow, 1).setFontStyle('italic').setFontSize(10).setFontColor('#666666');
-    currentRow++;
-    summarySheet.getRange(currentRow, 1).setValue('• Current = Total story points from all tickets within the Epic(s)');
-    summarySheet.getRange(currentRow, 1).setFontStyle('italic').setFontSize(10).setFontColor('#666666');
+    // Add Allocation Analysis Chart (shows actual planned work vs capacity)
+    const allocationResult = createTeamAllocationChart(sheet, currentRow, teamIssues, scrumTeam);
+    currentRow = allocationResult.nextRow;
     currentRow += 2;
 
-    if (problematicEpics.length > 0 || underEstimatedEpics.length > 0) {
-      const allProblematicEpics = [...new Set([...problematicEpics, ...underEstimatedEpics])];
-      const sortedProblematicEpics = sortEpics(allProblematicEpics);
+    // Add Epics slotted by Iteration chart
+    currentRow = createEpicsSlottedByIteration(sheet, currentRow, teamIssues, scrumTeam, programIncrement);
+    currentRow += 2;
 
-      const epicHeaders = ['Key', 'Summary', 'Value Stream', 'Allocation', 'Status', 'Story Point Estimate', 'LOE Estimate', 'Difference', 'Feature Points (x10)'];
-      summarySheet.getRange(currentRow, 1, 1, epicHeaders.length).setValues([epicHeaders]);
-      summarySheet.getRange(currentRow, 1, 1, epicHeaders.length)
-        .setFontWeight('bold')
-        .setBackground('#9b7bb8')
-        .setFontColor('white')
-        .setFontFamily('Comfortaa')
-        .setFontSize(8);
+    // Add Initiative Analysis section (Portfolio & Program Initiative distribution)
+    currentRow = createTeamInitiativeAnalysis(sheet, currentRow, teamIssues, scrumTeam, programIncrement);
+    currentRow += 2;
 
-      // Track the LOE section range for filter view
-      const loeHeaderRow = currentRow;
-      currentRow++;
+    // Add All Epics for Planning section
+    currentRow = createAllEpicsForPlanning(sheet, currentRow, teamIssues, scrumTeam);
+    currentRow += 2;
 
-      const epicData = sortedProblematicEpics.map(epic => [
-        epic.key,
-        epic.summary.substring(0, 60) + (epic.summary.length > 60 ? '...' : ''),
-        epic.valueStream || 'Unknown',
-        epic.allocation || '',
-        epic.status,
-        epic.storyPointEstimate || 0,
-        epic.loeEstimate || 0,
-        (epic.loeEstimate || 0) - (epic.storyPointEstimate || 0),
-        (epic.featurePoints || 0) * 10
-      ]);
+    // Add Release Version Validation section
+    currentRow = createReleaseVersionValidation(sheet, currentRow, teamIssues, scrumTeam, programIncrement);
+    currentRow += 2;
 
-      const epicDataRange = summarySheet.getRange(currentRow, 1, epicData.length, epicHeaders.length);
-      epicDataRange.setValues(epicData);
-      epicDataRange.setFontSize(8);
+    // Add Allocation Mismatch section (if applicable)
+    currentRow = addAllocationMismatchToSummary(sheet, currentRow, teamIssues, scrumTeam);
 
-      // Apply hyperlinks to epic keys
-      const epicKeys = sortedProblematicEpics.map(epic => epic.key);
-      applyJiraHyperlinks(summarySheet, currentRow, 1, epicKeys);
+    // Add summary of what was included
+    currentRow += 2;
+    sheet.getRange(currentRow, 1).setValue('Summary Report Information');
+    sheet.getRange(currentRow, 1).setFontSize(10).setFontWeight('bold').setFontFamily('Comfortaa');
+    currentRow++;
 
-      // Store range for filter view
-      sectionRanges.loeSection = {
-        startRow: loeHeaderRow,
-        endRow: currentRow + epicData.length - 1,
-        numColumns: epicHeaders.length
-      };
+    const endTime = new Date();
+    const formattedEndTime = Utilities.formatDate(endTime, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    sheet.getRange(currentRow, 1).setValue(`Report completed at: ${formattedEndTime}`);
+    sheet.getRange(currentRow, 1).setFontSize(8).setFontStyle('italic').setFontFamily('Comfortaa');
+    currentRow++;
 
-      const diffColumn = 8;
-      for (let i = 0; i < epicData.length; i++) {
-        const diff = epicData[i][7];
-        if (diff > 0) {
-          summarySheet.getRange(currentRow + i, diffColumn)
-            .setBackground('#ffcccc')
-            .setFontWeight('bold');
-        } else if (diff <= -5) {
-          summarySheet.getRange(currentRow + i, diffColumn)
-            .setBackground('#ccffcc')
-            .setFontWeight('bold');
-        }
-      }
-
-      currentRow += epicData.length;
-    } else {
-      summarySheet.getRange(currentRow, 1).setValue('No epics found with variance between estimates');
-      summarySheet.getRange(currentRow, 1).setFontStyle('italic').setFontColor('#666666');
-      currentRow++;
+    // Set all columns to width 100
+    for (let col = 1; col <= 20; col++) {
+      sheet.setColumnWidth(col, 100);
     }
 
-    // ===== ALLOCATION MISMATCH SECTION =====
-    // Replace the inline implementation with a call to the standalone function
-    currentRow += 2;
-
-    // Option 1: Use the detailed report format (recommended for consistency with other sections)
-    currentRow = createDetailedAllocationMismatchReport(summarySheet, currentRow, teamIssues, scrumTeam);
-
-    // Option 2: Use the compact table format (uncomment if preferred)
-    // currentRow = createEpicAllocationMismatchTable(summarySheet, currentRow, teamIssues, scrumTeam);
-
-    // ===== RELEASE VERSION VALIDATION SECTION =====
-    currentRow += 2;
-    currentRow = createReleaseVersionValidation(summarySheet, currentRow, teamIssues, scrumTeam, programIncrement);
-
-    // All Epics section
-    currentRow += 2;
-    summarySheet.getRange(currentRow, 1).setValue('All Epics');
-    summarySheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#e8f0fe').setFontFamily('Comfortaa');
-    currentRow += 2;
-
-    if (epics.length > 0) {
-      // Sort by Cost of Delay descending (highest first)
-      const sortedEpics = epics.sort((a, b) => {
-        const aCost = parseFloat(a.costOfDelay) || 0;
-        const bCost = parseFloat(b.costOfDelay) || 0;
-        return bCost - aCost; // Descending order
-      });
-
-      // Add Cost of Delay to headers
-      const allEpicHeaders = ['Key', 'Summary', 'Value Stream', 'Allocation', 'Status', 'Story Point Estimate', 'LOE Estimate', 'Feature Points (x10)', 'Cost of Delay'];
-
-      summarySheet.getRange(currentRow, 1, 1, allEpicHeaders.length).setValues([allEpicHeaders]);
-      summarySheet.getRange(currentRow, 1, 1, allEpicHeaders.length)
-        .setFontWeight('bold')
-        .setBackground('#9b7bb8')
-        .setFontColor('white')
-        .setFontFamily('Comfortaa')
-        .setFontSize(8);
-
-      // Track the all epics section range for filter view
-      const allEpicsHeaderRow = currentRow;
-      currentRow++;
-
-      const allEpicData = sortedEpics.map(epic => [
-        epic.key,
-        epic.summary.substring(0, 60) + (epic.summary.length > 60 ? '...' : ''),
-        epic.valueStream || 'Unknown',
-        epic.allocation || '',
-        epic.status,
-        epic.storyPointEstimate || 0,
-        epic.loeEstimate || 0,
-        (epic.featurePoints || 0) * 10,
-        epic.costOfDelay || 0
-      ]);
-
-      const allEpicRange = summarySheet.getRange(currentRow, 1, allEpicData.length, allEpicHeaders.length);
-      allEpicRange.setValues(allEpicData);
-      allEpicRange.setFontSize(8);
-
-      // Apply hyperlinks to all epic keys
-      const allEpicKeys = sortedEpics.map(epic => epic.key);
-      applyJiraHyperlinks(summarySheet, currentRow, 1, allEpicKeys);
-
-      // Store range for filter view
-      sectionRanges.allEpicsSection = {
-        startRow: allEpicsHeaderRow,
-        endRow: currentRow + allEpicData.length - 1,
-        numColumns: allEpicHeaders.length
-      };
-
-      const problematicKeys = new Set([...problematicEpics.map(e => e.key), ...underEstimatedEpics.map(e => e.key)]);
-
-      for (let i = 0; i < allEpicData.length; i++) {
-        const epicKey = allEpicData[i][0];
-        if (problematicKeys.has(epicKey)) {
-          summarySheet.getRange(currentRow + i, 1, 1, allEpicHeaders.length)
-            .setBackground('#fff3cd');
-        }
+    // Ensure all rows have reasonable heights (max 70)
+    const lastRow = sheet.getLastRow();
+    for (let row = 1; row <= lastRow; row++) {
+      const currentHeight = sheet.getRowHeight(row);
+      if (currentHeight > 70) {
+        sheet.setRowHeight(row, 70);
       }
-
-      currentRow += allEpicData.length;
-    }
-
-    // Column widths
-    summarySheet.setColumnWidth(1, 120);  // Key
-    summarySheet.setColumnWidth(2, 300);  // Summary
-    summarySheet.getRange(1, 2, summarySheet.getMaxRows(), 1).setWrap(true);
-
-    for (let col = 3; col <= 5; col++) {
-      summarySheet.autoResizeColumn(col);
-    }
-
-    // Freeze rows and columns at the very end
-    summarySheet.setFrozenRows(5);
-    summarySheet.setFrozenColumns(2);
-
-    // Create filter views for each section
-    try {
-      createFilterViews(summarySheet, sectionRanges);
-    } catch (error) {
-      console.log('Could not create filter views:', error);
     }
 
     return {
       success: true,
       team: scrumTeam,
-      epicCount: epics.length,
-      storyCount: stories.length,
-      sheetName: summarySheetName
+      sheetName: sheetName
     };
 
   } catch (error) {
@@ -3088,909 +1745,125 @@ function createScrumTeamSummary(allIssues, programIncrement, scrumTeam, targetSp
   }
 }
 
-function createPlanningProgressGauges(sheet, startRow, allIssues, epics, stories, valueStream) {
-  console.log(`Creating planning progress gauges for ${valueStream}`);
+function createScrumTeamSummaries(allIssues, programIncrement, scrumTeams, targetSpreadsheet) {
+  const results = {
+    success: [],
+    failed: [],
+    total: scrumTeams.length
+  };
 
-  // Get capacity data
-  const spreadsheet = sheet.getParent();
-  const capacityData = getCapacityDataDynamic(spreadsheet, allIssues, valueStream);
+  scrumTeams.forEach(scrumTeam => {
+    try {
+      console.log(`Processing team: ${scrumTeam}`);
 
-  // Calculate planning metrics
-  const planningItems = stories.filter(s => s.issueType === 'Story' || s.issueType === 'Bug');
-  const epicPlanningItems = stories.filter(s =>
+      // Call the singular function for each team
+      const result = createScrumTeamSummary(allIssues, programIncrement, scrumTeam, targetSpreadsheet);
+
+      if (result.success) {
+        results.success.push(result);
+        console.log(`Successfully created summary for ${scrumTeam}`);
+      } else {
+        results.failed.push(result);
+        console.log(`Failed to create summary for ${scrumTeam}: ${result.error}`);
+      }
+    } catch (error) {
+      console.error(`Error creating summary for ${scrumTeam}:`, error);
+      results.failed.push({
+        success: false,
+        team: scrumTeam,
+        error: error.toString()
+      });
+    }
+  });
+
+  console.log(`Summary creation complete: ${results.success.length} succeeded, ${results.failed.length} failed`);
+  return results;
+}
+
+// ===== SECTION CREATION FUNCTIONS (in order of usage) =====
+function calculateTotalStoryPoints(issues, scrumTeam) {
+  const stories = issues.filter(i => i.issueType === 'Story' || i.issueType === 'Bug'); // UPDATED: Include Bug type
+  let totalStoryPoints = 0;
+
+  stories.forEach(story => {
+    const category = mapAllocationToCategory(story.allocation);
+    if (category) {
+      totalStoryPoints += story.storyPoints || 0;
+    }
+  });
+
+  return totalStoryPoints;
+}
+
+function createTeamPlanningProgressGauges(sheet, startRow, allIssues, epics, stories, scrumTeam, programIncrement, totalStoryPoints, capacitySpreadsheet) {
+  console.log(`Creating planning progress gauges for ${scrumTeam}`);
+
+  // Set column widths to 100
+  for (let col = 1; col <= 4; col++) {
+    sheet.setColumnWidth(col, 100);
+  }
+
+  // Use capacitySpreadsheet for capacity data if provided, otherwise use sheet's parent
+  const spreadsheet = capacitySpreadsheet || sheet.getParent();
+
+  // Get capacity data from consolidated capacity sheet
+  let percentCapacityUsed = 0;
+  let capacityUsedStatus = 'No capacity data';
+
+  try {
+    if (typeof getCapacityDataForTeamConsolidated === 'function') {
+      const capacityData = getCapacityDataForTeamConsolidated(spreadsheet, scrumTeam);
+
+      if (capacityData) {
+        console.log(`Found capacity data for ${scrumTeam} from consolidated format`);
+
+        // Use product capacity (Feature + Compliance) as available capacity
+        const availableCapacity = capacityData.productCapacity || 0;
+        console.log(`Available capacity (Product): ${availableCapacity}`);
+        console.log(`Total story points (calculated): ${totalStoryPoints}`);
+
+        if (availableCapacity > 0) {
+          // Calculate % of capacity used (total story points / available capacity)
+          percentCapacityUsed = Math.round((totalStoryPoints / availableCapacity) * 100);
+
+          if (percentCapacityUsed > 100) {
+            capacityUsedStatus = `${percentCapacityUsed}% (OVERALLOCATED)`;
+          } else {
+            capacityUsedStatus = `${percentCapacityUsed}%`;
+          }
+
+          console.log(`Calculated percentage - Used: ${percentCapacityUsed}%`);
+        } else {
+          capacityUsedStatus = 'No capacity defined';
+          console.log('No available capacity defined for team');
+        }
+      } else {
+        console.log(`No capacity data found for team ${scrumTeam} in consolidated format`);
+      }
+    } else {
+      console.log('getCapacityDataForTeamConsolidated not available');
+    }
+  } catch (e) {
+    console.error(`Error getting capacity data: ${e.message}`);
+  }
+
+  // Calculate planning metrics for epics
+  // UPDATED: Include both Story and Bug types
+  const epicStories = stories.filter(s =>
     (s.issueType === 'Story' || s.issueType === 'Bug') &&
     (s.epicLink || s.parentKey)
   );
   const epicsWithAllStoryPoints = new Set();
 
-  epics.forEach(epic => {
-    const epicChildPlanningItems = epicPlanningItems.filter(s =>
-      (s.parentKey === epic.key || s.epicLink === epic.key)
-    );
-
-    // Check if all planning items (Stories/Bugs) have story points
-    if (epicChildPlanningItems.length > 0 &&
-        epicChildPlanningItems.every(s => s.storyPoints && s.storyPoints > 0)) {
-      epicsWithAllStoryPoints.add(epic.key);
-    }
-  });
-
-  const percentEpicsWithStoryPoints = epics.length > 0 ?
-    Math.round((epicsWithAllStoryPoints.size / epics.length) * 100) : 0;
-
-  // Calculate % of planned capacity allocated
-  let percentCapacityAllocated = 0;
-  if (capacityData && capacityData.total > 0) {
-    const totalStoryPoints = planningItems.reduce((sum, s) => sum + (s.storyPoints || 0), 0);
-    percentCapacityAllocated = Math.round((totalStoryPoints / capacityData.total) * 100);
-  }
-
-  // Create the gauge section
-  sheet.getRange(startRow, 1).setValue('Planning Progress');
-  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
-  startRow += 2;
-
-  // Planning completion metrics
-  const metricsHeaders = ['Metric', '', 'Value', 'Progress'];
-  sheet.getRange(startRow, 1, 1, metricsHeaders.length).setValues([metricsHeaders]);
-  sheet.getRange(startRow, 1, 1, 2).merge();
-  sheet.getRange(startRow, 1, 1, metricsHeaders.length)
-    .setFontWeight('bold')
-    .setBackground('#9b7bb8')
-    .setFontColor('white')
-    .setFontSize(8);
-  startRow++;
-
-  // Capacity allocation row
-  sheet.getRange(startRow, 1, 1, 2).merge();
-  sheet.getRange(startRow, 1).setValue('% of Baseline Capacity Allocated');
-  sheet.getRange(startRow, 3).setValue(`${percentCapacityAllocated}%`);
-  sheet.getRange(startRow, 1, 1, 4).setFontSize(8);
-
-  // Create progress bar for capacity
-  createProgressBar(sheet, startRow, 4, percentCapacityAllocated);
-  startRow++;
-
-  // Epics with story points row
-  sheet.getRange(startRow, 1, 1, 2).merge();
-  sheet.getRange(startRow, 1).setValue('% of Epics with All Stories Pointed');
-  sheet.getRange(startRow, 3).setValue(`${percentEpicsWithStoryPoints}%`);
-  sheet.getRange(startRow, 1, 1, 4).setFontSize(8);
-
-  // Create progress bar for epics
-  createProgressBar(sheet, startRow, 4, percentEpicsWithStoryPoints);
-  startRow++;
-
-  // Add allocation breakdown chart
-  startRow += 2;
-  sheet.getRange(startRow, 1).setValue('Allocation Breakdown');
-  sheet.getRange(startRow, 1).setFontSize(12).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
-  startRow += 2;
-
-  const allocBreakdownHeaders = ['Allocation Type', '', '% of Total'];
-  sheet.getRange(startRow, 1, 1, allocBreakdownHeaders.length).setValues([allocBreakdownHeaders]);
-  sheet.getRange(startRow, 1, 1, 2).merge();
-  sheet.getRange(startRow, 1, 1, allocBreakdownHeaders.length)
-    .setFontWeight('bold')
-    .setBackground('#9b7bb8')
-    .setFontColor('white')
-    .setFontSize(8);
-  startRow++;
-
-  // Calculate allocation percentages
-  const allocationTotals = {};
-  let totalPoints = 0;
-
-  stories.forEach(story => {
-    const points = story.storyPoints || 0;
-    if (points > 0) {
-      const category = mapAllocationToCategory(story.allocation);
-      allocationTotals[category] = (allocationTotals[category] || 0) + points;
-      totalPoints += points;
-    }
-  });
-
-  // Sort allocations by percentage
-  const sortedAllocations = Object.entries(allocationTotals)
-    .map(([category, points]) => ({
-      category: category,
-      points: points,
-      percentage: totalPoints > 0 ? Math.round((points / totalPoints) * 100) : 0
-    }))
-    .sort((a, b) => b.percentage - a.percentage);
-
-  // Write allocation breakdown
-  sortedAllocations.forEach(alloc => {
-    sheet.getRange(startRow, 1, 1, 2).merge();
-    sheet.getRange(startRow, 1).setValue(alloc.category);
-    sheet.getRange(startRow, 3).setValue(`${alloc.percentage}%`);
-    sheet.getRange(startRow, 1, 1, 3).setFontSize(8);
-
-    // Color code based on allocation type
-    const cellColor = getAllocationColor(alloc.category);
-    sheet.getRange(startRow, 3).setBackground(cellColor);
-
-    startRow++;
-  });
-
-  return startRow;
-}
-
-function createProgressBar(sheet, row, column, percentage) {
-  // Ensure percentage is within valid bounds (0-100)
-  percentage = Math.max(0, Math.min(100, percentage || 0));
-
-  const barLength = 10; // Use 10 instead of 20 to avoid issues
-  const filledLength = Math.max(0, Math.round((percentage / 100) * barLength));
-  const emptyLength = Math.max(0, barLength - filledLength);
-
-  // Create the progress bar string
-  const filledChar = '#';
-  const emptyChar = '-';
-
-  // Ensure we never pass negative values to repeat
-  const progressBar = filledChar.repeat(filledLength) + emptyChar.repeat(emptyLength);
-
-  // Set the value
-  sheet.getRange(row, column).setValue(progressBar);
-  sheet.getRange(row, column).setFontFamily('Courier New');
-
-  // Color based on percentage
-  let color = '#ff6b6b'; // Red for low
-  if (percentage >= 50) color = '#ffd43b'; // Yellow for medium
-  if (percentage >= 80) color = '#51cf66'; // Green for high
-
-  sheet.getRange(row, column).setFontColor(color);
-}
-
-function createAllocationChart(sheet, startRow, issues, scrumTeams, teamMetrics, valueStream) {
-  console.log(`\n=== Creating Allocation Chart for Value Stream: ${valueStream} ===`);
-
-  const epics = issues.filter(i => i.issueType === 'Epic');
-  const stories = issues.filter(i => i.issueType !== 'Epic');
-
-  // Title for chart section
-  sheet.getRange(startRow, 1).setValue('Allocation Analysis Chart');
-  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
-  startRow += 2;
-
-  // Headers for the chart data
-  const chartHeaders = [
-    'Allocation Type', '', 'Baseline Capacity', 'PLANNED Allocation',
-    'PLANNED Availability', '% PLANNED Availability', 'Current Capacity',
-    'Current Availability', '% Current Availability'
-  ];
-
-  // Write headers
-  sheet.getRange(startRow, 1, 1, chartHeaders.length).setValues([chartHeaders]);
-  sheet.getRange(startRow, 1, 1, 2).merge();
-
-  // Format header row
-  sheet.getRange(startRow, 1, 1, chartHeaders.length)
-    .setFontWeight('bold')
-    .setBackground('#9b7bb8')
-    .setFontColor('white')
-    .setFontSize(8)
-    .setWrap(true);
-
-  // Center align headers for columns C through L (columns 3-12)
-  sheet.getRange(startRow, 3, 1, chartHeaders.length - 2).setHorizontalAlignment('center');
-
-  startRow++;
-
-  // Define allocation categories with their corresponding capacity columns
-  const allocations = [
-    { name: 'Features (Product - Compliance & Feature)', capacityColumn: 'B' },
-    { name: 'Tech / Platform', capacityColumn: 'C' },
-    { name: 'Planned KLO', capacityColumn: 'D' },
-    { name: 'Planned Quality', capacityColumn: 'E' }
-  ];
-
-  // Calculate anticipated and current allocations
-  const allocationData = {};
-  allocations.forEach(alloc => {
-    allocationData[alloc.name] = {
-      anticipatedAllocation: 0,
-      currentCapacity: 0
-    };
-  });
-
-  // Sum up allocations
-  epics.forEach(epic => {
-    const category = mapAllocationToCategory(epic.allocation);
-    if (allocationData[category]) {
-      const featurePointValue = (epic.featurePoints || 0) * 10;
-      allocationData[category].anticipatedAllocation += featurePointValue;
-    }
-  });
-
-  stories.forEach(story => {
-    // Only include Stories and Bugs in allocation calculations
-    if (story.issueType === 'Story' || story.issueType === 'Bug') {
-      const category = mapAllocationToCategory(story.allocation);
-      if (allocationData[category]) {
-        const storyPointValue = story.storyPoints || 0;
-        allocationData[category].currentCapacity += storyPointValue;
-      }
-    }
-  });
-
-
-  // Write data rows with FORMULAS for planned capacity
-  allocations.forEach((alloc, index) => {
-    const rowNum = startRow + index;
-    const data = allocationData[alloc.name];
-
-    // Merge A&B for allocation type
-    sheet.getRange(rowNum, 1, 1, 2).merge();
-    sheet.getRange(rowNum, 1).setValue(alloc.name);
-
-    // Set FORMULA for planned capacity - SUM rows 3-10 for value stream
-    const capacityFormula = `=SUM(Capacity!${alloc.capacityColumn}3:${alloc.capacityColumn}10)`;
-    sheet.getRange(rowNum, 3).setFormula(capacityFormula);
-
-    // Set anticipated allocation value
-    sheet.getRange(rowNum, 4).setValue(data.anticipatedAllocation);
-
-    // Set formulas for variances
-    sheet.getRange(rowNum, 5).setFormula(`=C${rowNum}-D${rowNum}`); // Anticipated Variance
-    sheet.getRange(rowNum, 6).setFormula(`=IF(C${rowNum}>0,ROUND(E${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Anticipated Variance
-
-    // Set current capacity value
-    sheet.getRange(rowNum, 7).setValue(data.currentCapacity);
-
-    // Set formulas for current variances
-    sheet.getRange(rowNum, 8).setFormula(`=C${rowNum}-G${rowNum}`); // Current Variance
-    sheet.getRange(rowNum, 9).setFormula(`=IF(C${rowNum}>0,ROUND(H${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Current Variance
-  });
-
-  // Set font size for data rows
-  sheet.getRange(startRow, 1, allocations.length, chartHeaders.length).setFontSize(8);
-
-  // Center align all data columns (C through L, which is columns 3-12)
-  // Note: We go to column 9 as that's the last column with data
-  sheet.getRange(startRow, 3, allocations.length, 7).setHorizontalAlignment('center');
-
-  // Apply conditional formatting to variance cells
-  for (let i = 0; i < allocations.length; i++) {
-    const row = startRow + i;
-
-    // We'll apply static formatting based on formula results
-    // Note: Google Apps Script doesn't support true conditional formatting rules
-    SpreadsheetApp.flush(); // Force calculation
-
-    // Check anticipated variance
-    const anticipatedValue = sheet.getRange(row, 5).getValue();
-    if (typeof anticipatedValue === 'number') {
-      sheet.getRange(row, 5).setBackground(anticipatedValue >= 0 ? '#ccffcc' : '#ffcccc');
-    }
-
-    // Check current variance
-    const currentValue = sheet.getRange(row, 8).getValue();
-    if (typeof currentValue === 'number') {
-      sheet.getRange(row, 8).setBackground(currentValue >= 0 ? '#ccffcc' : '#ffcccc');
-    }
-  }
-
-  startRow += allocations.length;
-
-  // Add TOTALS row
-  startRow++;
-  const totalRow = startRow;
-
-  // Merge A&B for TOTALS
-  sheet.getRange(totalRow, 1, 1, 2).merge();
-  sheet.getRange(totalRow, 1).setValue('TOTAL');
-
-  // Set formulas for totals
-  const firstDataRow = totalRow - allocations.length;
-  const lastDataRow = totalRow - 1;
-
-  sheet.getRange(totalRow, 3).setFormula(`=SUM(C${firstDataRow}:C${lastDataRow})`); // Total Planned
-  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow})`); // Total Anticipated
-  sheet.getRange(totalRow, 5).setFormula(`=C${totalRow}-D${totalRow}`); // Total Anticipated Variance
-  sheet.getRange(totalRow, 6).setFormula(`=IF(C${totalRow}>0,ROUND(E${totalRow}/C${totalRow}*100,0)&"%","0%")`);
-  sheet.getRange(totalRow, 7).setFormula(`=SUM(G${firstDataRow}:G${lastDataRow})`); // Total Current
-  sheet.getRange(totalRow, 8).setFormula(`=C${totalRow}-G${totalRow}`); // Total Current Variance
-  sheet.getRange(totalRow, 9).setFormula(`=IF(C${totalRow}>0,ROUND(H${totalRow}/C${totalRow}*100,0)&"%","0%")`);
-
-  // Format TOTALS row
-  sheet.getRange(totalRow, 1, 1, chartHeaders.length).setFontWeight('bold').setFontSize(8);
-
-  // Center align totals row data (columns C through L)
-  sheet.getRange(totalRow, 3, 1, 7).setHorizontalAlignment('center');
-
-  // Apply conditional formatting to total variance cells after calculation
-  SpreadsheetApp.flush();
-  const totalAnticipatedValue = sheet.getRange(totalRow, 5).getValue();
-  if (typeof totalAnticipatedValue === 'number') {
-    sheet.getRange(totalRow, 5).setBackground(totalAnticipatedValue >= 0 ? '#ccffcc' : '#ffcccc');
-  }
-
-  const totalCurrentValue = sheet.getRange(totalRow, 8).getValue();
-  if (typeof totalCurrentValue === 'number') {
-    sheet.getRange(totalRow, 8).setBackground(totalCurrentValue >= 0 ? '#ccffcc' : '#ffcccc');
-  }
-
-  startRow = totalRow + 2;
-
-  console.log('=== Allocation Chart Complete ===\n');
-  return startRow;
-}
-
-function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
-  console.log(`Creating allocation chart for team: ${scrumTeam}`);
-
-  const epics = issues.filter(i => i.issueType === 'Epic');
-  const stories = issues.filter(i => i.issueType !== 'Epic');
-
-  // Title for chart section
-  sheet.getRange(startRow, 1).setValue('Allocation Analysis Chart');
-  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
-  startRow++;
-
-  // Add note under title
-  sheet.getRange(startRow, 1).setValue('Note:');
-  sheet.getRange(startRow, 1).setFontWeight('bold').setFontStyle('italic').setFontSize(10);
-  startRow++;
-  sheet.getRange(startRow, 1).setValue('• PLANNED = Feature Points calculated at the Epic level');
-  sheet.getRange(startRow, 1).setFontStyle('italic').setFontSize(10).setFontColor('#666666');
-  startRow++;
-  sheet.getRange(startRow, 1).setValue('• Current = Total story points from all tickets within the Epic(s)');
-  sheet.getRange(startRow, 1).setFontStyle('italic').setFontSize(10).setFontColor('#666666');
-  startRow += 2;
-
-  // Headers for the chart data
-  const chartHeaders = [
-    'Allocation Type', '', 'Baseline Capacity', 'PLANNED Allocation',
-    'PLANNED Availability', '% PLANNED Availability', 'Current Capacity',
-    'Current Availability', '% Current Availability'
-  ];
-
-  // Write headers
-  sheet.getRange(startRow, 1, 1, chartHeaders.length).setValues([chartHeaders]);
-  sheet.getRange(startRow, 1, 1, 2).merge();
-
-  // Format header row
-  sheet.getRange(startRow, 1, 1, chartHeaders.length)
-    .setFontWeight('bold')
-    .setBackground('#9b7bb8')
-    .setFontColor('white')
-    .setFontSize(8)
-    .setWrap(true);
-
-  // Center align headers for columns C through I (columns 3-9)
-  sheet.getRange(startRow, 3, 1, chartHeaders.length - 2).setHorizontalAlignment('center');
-
-  startRow++;
-
-  // Define allocation categories with their corresponding capacity columns
-  const allocations = [
-    { name: 'Features (Product - Compliance & Feature)', capacityColumn: 'B', columnIndex: 2 },
-    { name: 'Tech / Platform', capacityColumn: 'C', columnIndex: 3 },
-    { name: 'Planned KLO', capacityColumn: 'D', columnIndex: 4 },
-    { name: 'Planned Quality', capacityColumn: 'E', columnIndex: 5 }
-  ];
-
-  // Calculate anticipated and current allocations
-  const allocationData = {};
-  allocations.forEach(alloc => {
-    allocationData[alloc.name] = {
-      anticipatedAllocation: 0,
-      currentCapacity: 0
-    };
-  });
-
-  // Sum up allocations
-  epics.forEach(epic => {
-    const category = mapAllocationToCategory(epic.allocation);
-    if (allocationData[category]) {
-      const featurePointValue = (epic.featurePoints || 0) * 10;
-      allocationData[category].anticipatedAllocation += featurePointValue;
-    }
-  });
-
-  stories.forEach(story => {
-    const category = mapAllocationToCategory(story.allocation);
-    if (allocationData[category]) {
-      const storyPointValue = story.storyPoints || 0;
-      allocationData[category].currentCapacity += storyPointValue;
-    }
-  });
-
-  // Write data rows with FORMULAS for planned capacity
-  allocations.forEach((alloc, index) => {
-    const rowNum = startRow + index;
-    const data = allocationData[alloc.name];
-
-    // Merge A&B for allocation type
-    sheet.getRange(rowNum, 1, 1, 2).merge();
-    sheet.getRange(rowNum, 1).setValue(alloc.name);
-
-    // Set FORMULA for planned capacity using uppercase matching
-    const capacityFormula = `=IFERROR(INDEX(Capacity!${alloc.capacityColumn}:${alloc.capacityColumn},MATCH(UPPER("${scrumTeam}"),ARRAYFORMULA(UPPER(Capacity!A:A)),0)),0)`;
-    sheet.getRange(rowNum, 3).setFormula(capacityFormula);
-
-    // Log for debugging
-    console.log(`Row ${rowNum} (${alloc.name}): Looking up "${scrumTeam}" (uppercase) in Capacity sheet column ${alloc.capacityColumn}`);
-
-    // Set anticipated allocation value
-    sheet.getRange(rowNum, 4).setValue(data.anticipatedAllocation);
-
-    // Set formulas for variances
-    sheet.getRange(rowNum, 5).setFormula(`=C${rowNum}-D${rowNum}`); // Anticipated Variance
-    sheet.getRange(rowNum, 6).setFormula(`=IF(C${rowNum}>0,ROUND(E${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Anticipated Variance
-
-    // Set current capacity value
-    sheet.getRange(rowNum, 7).setValue(data.currentCapacity);
-
-    // Set formulas for current variances
-    sheet.getRange(rowNum, 8).setFormula(`=C${rowNum}-G${rowNum}`); // Current Variance
-    sheet.getRange(rowNum, 9).setFormula(`=IF(C${rowNum}>0,ROUND(H${rowNum}/C${rowNum}*100,0)&"%","0%")`); // % Current Variance
-  });
-
-  // Set font size for data rows
-  sheet.getRange(startRow, 1, allocations.length, chartHeaders.length).setFontSize(8);
-
-  // Center align all data columns (C through I, which is columns 3-9)
-  sheet.getRange(startRow, 3, allocations.length, 7).setHorizontalAlignment('center');
-
-  // Apply conditional formatting to variance cells
-  for (let i = 0; i < allocations.length; i++) {
-    const row = startRow + i;
-
-    SpreadsheetApp.flush(); // Force calculation
-
-    // Check anticipated variance
-    const anticipatedValue = sheet.getRange(row, 5).getValue();
-    if (typeof anticipatedValue === 'number') {
-      sheet.getRange(row, 5).setBackground(anticipatedValue >= 0 ? '#ccffcc' : '#ffcccc');
-    }
-
-    // Check current variance
-    const currentValue = sheet.getRange(row, 8).getValue();
-    if (typeof currentValue === 'number') {
-      sheet.getRange(row, 8).setBackground(currentValue >= 0 ? '#ccffcc' : '#ffcccc');
-    }
-  }
-
-  startRow += allocations.length;
-
-  // Add TOTALS row
-  startRow++;
-  const totalRow = startRow;
-
-  // Merge A&B for TOTALS
-  sheet.getRange(totalRow, 1, 1, 2).merge();
-  sheet.getRange(totalRow, 1).setValue('TOTAL');
-
-  // Set formulas for totals
-  const firstDataRow = totalRow - allocations.length;
-  const lastDataRow = totalRow - 1;
-
-  sheet.getRange(totalRow, 3).setFormula(`=SUM(C${firstDataRow}:C${lastDataRow})`); // Total Planned
-  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow})`); // Total Anticipated
-  sheet.getRange(totalRow, 5).setFormula(`=C${totalRow}-D${totalRow}`); // Total Anticipated Variance
-  sheet.getRange(totalRow, 6).setFormula(`=IF(C${totalRow}>0,ROUND(E${totalRow}/C${totalRow}*100,0)&"%","0%")`);
-  sheet.getRange(totalRow, 7).setFormula(`=SUM(G${firstDataRow}:G${lastDataRow})`); // Total Current
-  sheet.getRange(totalRow, 8).setFormula(`=C${totalRow}-G${totalRow}`); // Total Current Variance
-  sheet.getRange(totalRow, 9).setFormula(`=IF(C${totalRow}>0,ROUND(H${totalRow}/C${totalRow}*100,0)&"%","0%")`);
-
-  // Format TOTALS row
-  sheet.getRange(totalRow, 1, 1, chartHeaders.length).setFontWeight('bold').setFontSize(8);
-
-  // Center align totals row data (columns C through I)
-  sheet.getRange(totalRow, 3, 1, 7).setHorizontalAlignment('center');
-
-  // Apply conditional formatting to total variance cells after calculation
-  SpreadsheetApp.flush();
-  const totalAnticipatedValue = sheet.getRange(totalRow, 5).getValue();
-  if (typeof totalAnticipatedValue === 'number') {
-    sheet.getRange(totalRow, 5).setBackground(totalAnticipatedValue >= 0 ? '#ccffcc' : '#ffcccc');
-  }
-
-  const totalCurrentValue = sheet.getRange(totalRow, 8).getValue();
-  if (typeof totalCurrentValue === 'number') {
-    sheet.getRange(totalRow, 8).setBackground(totalCurrentValue >= 0 ? '#ccffcc' : '#ffcccc');
-  }
-
-  startRow = totalRow + 2;
-
-  return startRow;
-}
-
-function createPIPlanningDashboard(piNumber) {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const dashboardSheetName = `PI ${piNumber} Dashboard`;
-
-  let dashboardSheet;
-  try {
-    dashboardSheet = safeGetOrCreateSheet(spreadsheet, dashboardSheetName);
-    safeRemoveFilter(dashboardSheet);
-    dashboardSheet.clear();
-  } catch (error) {
-    console.error('Error creating dashboard sheet:', error);
-    return;
-  }
-
-  const piSheet = spreadsheet.getSheetByName(`PI ${piNumber}`);
-  if (!piSheet) {
-    SpreadsheetApp.getUi().alert('No PI data found. Please run an analysis first.');
-    return;
-  }
-
-  const dataRange = piSheet.getDataRange();
-  const values = dataRange.getValues();
-  const headers = values[3];
-  const issues = parsePISheetData(values, headers);
-
-  console.log(`Dashboard: Processing ${issues.length} total issues`);
-
-  // Title
-  dashboardSheet.getRange(1, 1).setValue(`PI ${piNumber} Planning Dashboard`);
-  dashboardSheet.getRange(1, 1).setFontSize(18).setFontWeight('bold').setFontFamily('Comfortaa');
-
-  dashboardSheet.getRange(2, 1).setValue('* LOE is a sum of all story points associated to the epic | Dependencies from other value streams are tracked but not counted in metrics');
-  dashboardSheet.getRange(2, 1).setFontStyle('italic').setFontColor('#666666').setFontFamily('Comfortaa');
-
-  dashboardSheet.getRange(3, 1).setValue('Last Updated:');
-  dashboardSheet.getRange(3, 2).setValue(new Date().toLocaleString());
-  dashboardSheet.getRange(3, 1, 1, 2).setFontFamily('Comfortaa');
-
-  dashboardSheet.getRange(1, 1, dashboardSheet.getMaxRows(), dashboardSheet.getMaxColumns()).setFontFamily('Comfortaa');
-
-  let currentRow = 5;
-
-  const epics = issues.filter(i => i.issueType === 'Epic');
-  const stories = issues.filter(i => i.issueType !== 'Epic');
-
-  // Group by value stream
-  const valueStreamGroups = {};
-  issues.forEach(issue => {
-    let vs = issue.analyzedValueStream;
-    if (!vs || vs === '' || vs === null) {
-      vs = issue.valueStream;
-    }
-    if (!vs || vs === '' || vs === null) {
-      vs = 'Unknown';
-    }
-
-    vs = vs.toString().trim();
-
-    if (!valueStreamGroups[vs]) {
-      valueStreamGroups[vs] = [];
-    }
-    valueStreamGroups[vs].push(issue);
-  });
-
-  const valueStreams = Object.keys(valueStreamGroups).sort((a, b) => {
-    if (a === 'Unknown') return 1;
-    if (b === 'Unknown') return -1;
-    return a.localeCompare(b);
-  });
-
-  console.log(`Dashboard: Found ${valueStreams.length} value streams:`, valueStreams);
-
-  // ===== CREATE A SECTION FOR EACH VALUE STREAM =====
-  valueStreams.forEach((valueStream, index) => {
-    const vsIssues = valueStreamGroups[valueStream];
-
-    // ⭐ FILTER: Separate native work from cross-VS dependencies
-    const nativeIssues = vsIssues.filter(issue => {
-      // If it's not a dependency, it's native work
-      if (issue.issueType !== 'Dependency') return true;
-
-      // If it IS a dependency, only include if it's from THIS value stream
-      const issueVS = issue.analyzedValueStream || issue.valueStream || '';
-      return issueVS === valueStream;
-    });
-
-    const crossVSDependencies = vsIssues.filter(issue => {
-      // Only dependencies from OTHER value streams
-      if (issue.issueType !== 'Dependency') return false;
-
-      const issueVS = issue.analyzedValueStream || issue.valueStream || '';
-      return issueVS !== valueStream;
-    });
-
-    const vsEpics = nativeIssues.filter(i => i.issueType === 'Epic');
-    const vsStories = nativeIssues.filter(i => i.issueType !== 'Epic');
-
-    console.log(`Creating section for ${valueStream}:`);
-    console.log(`  - Native work: ${vsEpics.length} epics, ${vsStories.length} stories`);
-    console.log(`  - Cross-VS dependencies: ${crossVSDependencies.length} issues`);
-
-    // Value Stream Header
-    dashboardSheet.getRange(currentRow, 1).setValue(`${valueStream} Value Stream`);
-    dashboardSheet.getRange(currentRow, 1).setFontSize(16).setFontWeight('bold')
-      .setBackground('#4285f4').setFontColor('white');
-    currentRow += 2;
-
-    // Planning Progress
-    currentRow = createValueStreamPlanningProgress(
-      dashboardSheet,
-      currentRow,
-      nativeIssues,  // ⭐ Only native work for progress
-      vsEpics,
-      vsStories,
-      valueStream
-    );
-    currentRow += 2;
-
-    // Key Metrics (only native work)
-    dashboardSheet.getRange(currentRow, 1).setValue(`${valueStream} - Key Metrics`);
-    dashboardSheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold')
-      .setBackground('#34a853').setFontColor('white');
-    currentRow += 2;
-
-    const storiesWithoutPoints = vsStories.filter(s => !s.storyPoints || s.storyPoints === 0);
-    const epicsWithStoriesWithoutPoints = new Set();
-
-    storiesWithoutPoints.forEach(story => {
-      const epicKey = story.parentKey || story.epicLink;
-      if (epicKey) {
-        epicsWithStoriesWithoutPoints.add(epicKey);
-      }
-    });
-
-    const metricsData = [
-      ['Total Epics', vsEpics.length],
-      ['Total Stories/Tasks', vsStories.length],
-      ['Total Story Points', vsStories.reduce((sum, s) => sum + (s.storyPoints || 0), 0)],
-      ['Total LOE Estimate', vsEpics.reduce((sum, e) => sum + (e.loeEstimate || 0), 0)],
-      ['Epics Without Points', epicsWithStoriesWithoutPoints.size],
-      ['Stories Without Points', storiesWithoutPoints.length]
-    ];
-
-    // ⭐ Add cross-VS dependency count if any exist
-    if (crossVSDependencies.length > 0) {
-      metricsData.push(['Cross-VS Dependencies (tracked, not counted)', crossVSDependencies.length]);
-    }
-
-    dashboardSheet.getRange(currentRow, 1, metricsData.length, 2).setValues(metricsData);
-    dashboardSheet.getRange(currentRow, 1, metricsData.length, 2).setFontSize(8);
-
-    // Highlight the dependency row in light blue if it exists
-    if (crossVSDependencies.length > 0) {
-      const depRow = currentRow + metricsData.length - 1;
-      dashboardSheet.getRange(depRow, 1, 1, 2).setBackground('#e8f0fe');
-    }
-
-    currentRow += metricsData.length + 2;
-
-    // ⭐ Scrum Teams - Count native work separately from dependencies
-    dashboardSheet.getRange(currentRow, 1).setValue(`${valueStream} - Scrum Team Breakdown`);
-    dashboardSheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold')
-      .setBackground('#ea4335').setFontColor('white');
-    currentRow += 2;
-
-    const teamHeaders = ['Scrum Team', 'Epics', 'Stories', 'Story Points', 'LOE Estimate', 'Allocations', 'Without Points', 'Cross-VS Deps'];
-    dashboardSheet.getRange(currentRow, 1, 1, teamHeaders.length).setValues([teamHeaders]);
-    dashboardSheet.getRange(currentRow, 1, 1, teamHeaders.length)
-      .setFontWeight('bold')
-      .setBackground('#9b7bb8')
-      .setFontColor('white')
-      .setFontSize(8);
-    currentRow++;
-
-    // Group by team - counting native work and dependencies separately
-    const vsTeamGroups = {};
-
-    // Process native work
-    nativeIssues.forEach(issue => {
-      const team = issue.scrumTeam || 'Unassigned';
-      if (!vsTeamGroups[team]) {
-        vsTeamGroups[team] = {
-          epics: 0,
-          stories: 0,
-          storyPoints: 0,
-          loeEstimate: 0,
-          allocations: new Set(),
-          storiesWithoutPoints: 0,
-          crossVSDeps: 0
-        };
-      }
-
-      if (issue.issueType === 'Epic') {
-        vsTeamGroups[team].epics++;
-        vsTeamGroups[team].loeEstimate += (issue.loeEstimate || 0);
-      } else {
-        vsTeamGroups[team].stories++;
-        vsTeamGroups[team].storyPoints += (issue.storyPoints || 0);
-        if (!issue.storyPoints || issue.storyPoints === 0) {
-          vsTeamGroups[team].storiesWithoutPoints++;
-        }
-      }
-
-      if (issue.allocation) {
-        vsTeamGroups[team].allocations.add(issue.allocation);
-      }
-    });
-
-    // ⭐ Process cross-VS dependencies (for visibility only)
-    crossVSDependencies.forEach(issue => {
-      const team = issue.scrumTeam || 'Unassigned';
-      if (!vsTeamGroups[team]) {
-        vsTeamGroups[team] = {
-          epics: 0,
-          stories: 0,
-          storyPoints: 0,
-          loeEstimate: 0,
-          allocations: new Set(),
-          storiesWithoutPoints: 0,
-          crossVSDeps: 0
-        };
-      }
-
-      vsTeamGroups[team].crossVSDeps++;
-    });
-
-    const vsTeams = Object.keys(vsTeamGroups).sort((a, b) => {
-      if (a === 'Unassigned') return 1;
-      if (b === 'Unassigned') return -1;
-      return a.localeCompare(b);
-    });
-
-    const vsTeamData = vsTeams.map(team => [
-      team,
-      vsTeamGroups[team].epics,
-      vsTeamGroups[team].stories,
-      vsTeamGroups[team].storyPoints,
-      vsTeamGroups[team].loeEstimate,
-      vsTeamGroups[team].allocations.size,
-      vsTeamGroups[team].storiesWithoutPoints,
-      vsTeamGroups[team].crossVSDeps || 0
-    ]);
-
-    if (vsTeamData.length > 0) {
-      dashboardSheet.getRange(currentRow, 1, vsTeamData.length, teamHeaders.length).setValues(vsTeamData);
-      dashboardSheet.getRange(currentRow, 1, vsTeamData.length, teamHeaders.length).setFontSize(8);
-
-      // ⭐ Highlight rows with cross-VS dependencies in light blue
-      vsTeamData.forEach((row, idx) => {
-        if (row[7] > 0) { // If cross-VS deps exist
-          dashboardSheet.getRange(currentRow + idx, 8).setBackground('#e8f0fe');
-        }
-      });
-
-      currentRow += vsTeamData.length;
-    }
-
-    // Allocation Breakdown (native work only)
-    currentRow += 2;
-    dashboardSheet.getRange(currentRow, 1).setValue(`${valueStream} - Allocation Breakdown`);
-    dashboardSheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold')
-      .setBackground('#fbbc04').setFontColor('black');
-    currentRow += 2;
-
-    const allocHeaders = ['Allocation Type', 'Story Points', '% of Total'];
-    dashboardSheet.getRange(currentRow, 1, 1, allocHeaders.length).setValues([allocHeaders]);
-    dashboardSheet.getRange(currentRow, 1, 1, allocHeaders.length)
-      .setFontWeight('bold')
-      .setBackground('#9b7bb8')
-      .setFontColor('white')
-      .setFontSize(8);
-    currentRow++;
-
-    const allocBreakdown = {};
-    const totalVSPoints = vsStories.reduce((sum, s) => sum + (s.storyPoints || 0), 0);
-
-    nativeIssues.forEach(issue => {
-      const alloc = issue.allocation || 'Unassigned';
-      if (!allocBreakdown[alloc]) {
-        allocBreakdown[alloc] = 0;
-      }
-      if (issue.issueType !== 'Epic' && issue.storyPoints) {
-        allocBreakdown[alloc] += issue.storyPoints;
-      }
-    });
-
-    const allocData = Object.keys(allocBreakdown).sort().map(alloc => {
-      const points = allocBreakdown[alloc];
-      const percent = totalVSPoints > 0 ? Math.round((points / totalVSPoints) * 100) : 0;
-      return [alloc, points, `${percent}%`];
-    });
-
-    if (allocData.length > 0) {
-      dashboardSheet.getRange(currentRow, 1, allocData.length, allocHeaders.length).setValues(allocData);
-      dashboardSheet.getRange(currentRow, 1, allocData.length, allocHeaders.length).setFontSize(8);
-      currentRow += allocData.length;
-    }
-
-    // Risk Analysis (native work only)
-    currentRow += 2;
-    dashboardSheet.getRange(currentRow, 1).setValue(`${valueStream} - Risk Analysis`);
-    dashboardSheet.getRange(currentRow, 1).setFontSize(14).setFontWeight('bold')
-      .setBackground('#9b7bb8').setFontColor('white');
-    currentRow += 2;
-
-    const epicsExceeding = vsEpics.filter(e => e.loeEstimate > e.storyPointEstimate && e.loeEstimate > 0);
-    const epicsWithMismatches = vsEpics.filter(epic => {
-      const epicChildren = vsStories.filter(s => s.parentKey === epic.key || s.epicLink === epic.key);
-      return epicChildren.some(child => child.allocation && epic.allocation && child.allocation !== epic.allocation);
-    });
-
-    const riskData = [
-      ['Epics Exceeding Estimate', epicsExceeding.length],
-      ['Epics with Allocation Mismatches', epicsWithMismatches.length],
-      ['Stories without Epic', vsStories.filter(s => !s.epicLink && !s.parentKey).length],
-      ['Total Stories without Points', storiesWithoutPoints.length]
-    ];
-
-    dashboardSheet.getRange(currentRow, 1, riskData.length, 2).setValues(riskData);
-    dashboardSheet.getRange(currentRow, 1, riskData.length, 2).setFontSize(8);
-    currentRow += riskData.length;
-
-    // ⭐ OPTIONAL: Show cross-VS dependencies in detail
-    if (crossVSDependencies.length > 0) {
-      currentRow += 2;
-      dashboardSheet.getRange(currentRow, 1).setValue(`${valueStream} - Cross-Value Stream Dependencies (Tracked)`);
-      dashboardSheet.getRange(currentRow, 1).setFontSize(12).setFontWeight('bold')
-        .setBackground('#e8f0fe').setFontColor('#333333');
-      currentRow += 1;
-
-      dashboardSheet.getRange(currentRow, 1).setValue(`${crossVSDependencies.length} dependencies from other value streams are being tracked by teams in ${valueStream} but not counted in metrics above.`);
-      dashboardSheet.getRange(currentRow, 1).setFontSize(8).setFontStyle('italic').setFontColor('#666666');
-      currentRow += 1;
-
-      const depHeaders = ['Team', 'Issue Key', 'Summary', 'From Value Stream'];
-      dashboardSheet.getRange(currentRow, 1, 1, depHeaders.length).setValues([depHeaders]);
-      dashboardSheet.getRange(currentRow, 1, 1, depHeaders.length)
-        .setFontWeight('bold')
-        .setBackground('#e8f0fe')
-        .setFontColor('#333333')
-        .setFontSize(8);
-      currentRow++;
-
-      const depData = crossVSDependencies.map(dep => [
-        dep.scrumTeam || 'Unassigned',
-        dep.key,
-        dep.summary.substring(0, 60) + (dep.summary.length > 60 ? '...' : ''),
-        dep.analyzedValueStream || dep.valueStream || 'Unknown'
-      ]);
-
-      dashboardSheet.getRange(currentRow, 1, depData.length, depHeaders.length).setValues(depData);
-      dashboardSheet.getRange(currentRow, 1, depData.length, depHeaders.length)
-        .setFontSize(8)
-        .setBackground('#f8f9fa');
-      currentRow += depData.length;
-    }
-
-    if (index < valueStreams.length - 1) {
-      currentRow += 3;
-    }
-  });
-
-  // Column widths
-  dashboardSheet.setColumnWidth(1, 200);
-  dashboardSheet.setColumnWidth(2, 80);
-  dashboardSheet.setColumnWidth(3, 80);
-  dashboardSheet.setColumnWidth(4, 100);
-  dashboardSheet.setColumnWidth(5, 100);
-  dashboardSheet.setColumnWidth(6, 90);
-  dashboardSheet.setColumnWidth(7, 100);
-  dashboardSheet.setColumnWidth(8, 90);
-
-  dashboardSheet.setFrozenRows(5);
-
-  console.log(`PI Planning Dashboard created for PI ${piNumber} with ${valueStreams.length} value streams`);
-}
-
-function createOverallPlanningProgress(sheet, startRow, allIssues, epics, stories) {
-  console.log('Creating overall planning progress section');
-
-  // Get capacity data for all teams
-  const spreadsheet = sheet.getParent();
-  const capacityData = getCapacityDataDynamic(spreadsheet, allIssues, '');
-
-  // Calculate planning metrics
-  const epicStories = stories.filter(s => s.issueType === 'Story' && (s.epicLink || s.parentKey));
-  const epicsWithAllStoryPoints = new Set();
-
-  epics.forEach(epic => {
+  // Filter out epics that contain "Unplanned" in their summary
+  const plannedEpics = epics.filter(epic =>
+    !epic.summary || !epic.summary.toLowerCase().includes('unplanned')
+  );
+
+  plannedEpics.forEach(epic => {
     const epicChildStories = epicStories.filter(s =>
       (s.parentKey === epic.key || s.epicLink === epic.key) &&
-      s.issueType === 'Story'
+      (s.issueType === 'Story' || s.issueType === 'Bug') // UPDATED: Include Bug type
     );
 
     // Check if all stories have story points
@@ -3999,715 +1872,1491 @@ function createOverallPlanningProgress(sheet, startRow, allIssues, epics, storie
     }
   });
 
-  const percentEpicsWithStoryPoints = epics.length > 0 ?
-    Math.round((epicsWithAllStoryPoints.size / epics.length) * 100) : 0;
+  const percentEpicsWithStoryPoints = plannedEpics.length > 0 ?
+    Math.round((epicsWithAllStoryPoints.size / plannedEpics.length) * 100) : 0;
 
-  // Calculate % of planned capacity allocated
-  let percentCapacityAllocated = 0;
-  if (capacityData && capacityData.total > 0) {
-    const totalStoryPoints = stories.reduce((sum, s) => sum + (s.storyPoints || 0), 0);
-    percentCapacityAllocated = Math.round((totalStoryPoints / capacityData.total) * 100);
-  }
-
-  // Create the planning progress section
-  sheet.getRange(startRow, 1).setValue('Overall Planning Progress');
-  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
-  startRow += 2;
+  // Create the gauge section - no merging, just fill A, B, C with purple
+  sheet.getRange(startRow, 1).setValue('Planning Progress');
+  sheet.getRange(startRow, 1, 1, 4).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+  startRow++; // No space between title and table
 
   // Planning completion metrics
-  const metricsHeaders = ['Metric', 'Value', 'Visual'];
+  const metricsHeaders = ['Metric', '', 'Value', 'Progress'];
   sheet.getRange(startRow, 1, 1, metricsHeaders.length).setValues([metricsHeaders]);
   sheet.getRange(startRow, 1, 1, metricsHeaders.length)
     .setFontWeight('bold')
     .setBackground('#9b7bb8')
     .setFontColor('white')
-    .setFontSize(8);
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+
+  // Set header row height
+  setRowHeightWithLimit(sheet, startRow, 25, 70);
+
   startRow++;
 
-  // Capacity allocation row
-  sheet.getRange(startRow, 1).setValue('% of Baseline Capacity Allocated');
-  sheet.getRange(startRow, 2).setValue(`${percentCapacityAllocated}%`);
-  sheet.getRange(startRow, 1, 1, 3).setFontSize(8);
+  // % of capacity used row
+  sheet.getRange(startRow, 1).setValue('% of capacity used');
+  sheet.getRange(startRow, 3).setValue(capacityUsedStatus);
+  sheet.getRange(startRow, 1, 1, 4).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
 
-  // Create progress bar for capacity
-  createProgressBar(sheet, startRow, 3, percentCapacityAllocated);
+  // Set row height
+  setRowHeightWithLimit(sheet, startRow, 25, 70);
+
+  // Create progress bar for capacity used
+  createProgressBar(sheet, startRow, 4, percentCapacityUsed);
+
+  // If overallocated, make the value cell red too
+  if (percentCapacityUsed > 100) {
+    sheet.getRange(startRow, 3).setFontColor('#ff0000').setFontWeight('bold');
+  }
+
   startRow++;
 
   // Epics with story points row
   sheet.getRange(startRow, 1).setValue('% of Epics with All Stories Pointed');
-  sheet.getRange(startRow, 2).setValue(`${percentEpicsWithStoryPoints}%`);
-  sheet.getRange(startRow, 1, 1, 3).setFontSize(8);
+  sheet.getRange(startRow, 3).setValue(`${percentEpicsWithStoryPoints}%`);
+  sheet.getRange(startRow, 1, 1, 4).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+
+  // Set row height
+  setRowHeightWithLimit(sheet, startRow, 25, 70);
 
   // Create progress bar for epics
-  createProgressBar(sheet, startRow, 3, percentEpicsWithStoryPoints);
+  createProgressBar(sheet, startRow, 4, percentEpicsWithStoryPoints);
+  startRow += 2;
+
+  // Add Iteration Slotting chart below the metrics - use capacitySpreadsheet for capacity data
+  const iterationSlottingEndRow = createIterationSlottingChart(
+    sheet,
+    startRow,
+    allIssues,
+    scrumTeam,
+    programIncrement,
+    spreadsheet  // This is capacitySpreadsheet (source) for capacity lookups
+  );
+
+  // Add Role Breakdown chart below Iteration Slotting (if roles exist for this team)
+  const roleBreakdownEndRow = createRoleBreakdownChart(
+    sheet,
+    iterationSlottingEndRow,
+    allIssues,
+    scrumTeam,
+    programIncrement,
+    spreadsheet  // This is capacitySpreadsheet (source) for capacity lookups
+  );
+
+  return roleBreakdownEndRow;
+}
+
+/**
+ * Creates a Planned Capacity Distribution chart showing how capacity is allocated
+ * across allocation types (Product, Tech/Platform, Quality, KLO) from the capacity planning sheet
+ *
+ * @param {Sheet} sheet - The target sheet
+ * @param {number} startRow - Starting row
+ * @param {string} scrumTeam - Team name
+ * @param {Spreadsheet} capacitySpreadsheet - Spreadsheet containing capacity data
+ * @returns {number} Next available row after the chart
+ */
+function createPlannedCapacityDistributionChart(sheet, startRow, scrumTeam, capacitySpreadsheet) {
+  console.log(`Creating Planned Capacity Distribution chart for ${scrumTeam}`);
+
+  // Get capacity data from consolidated capacity sheet
+  let capacityData = null;
+  try {
+    if (typeof getCapacityDataForTeamConsolidated === 'function') {
+      capacityData = getCapacityDataForTeamConsolidated(capacitySpreadsheet, scrumTeam);
+    }
+  } catch (e) {
+    console.log(`Error getting capacity data: ${e.message}`);
+  }
+
+  if (!capacityData || !capacityData.allocations) {
+    console.log(`No capacity data found for ${scrumTeam} - skipping distribution chart`);
+    return startRow;
+  }
+
+  // Title
+  sheet.getRange(startRow, 1).setValue('Planned Capacity Distribution');
+  sheet.getRange(startRow, 1, 1, 6).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
   startRow++;
 
-  // Add allocation breakdown
-  startRow += 2;
-  sheet.getRange(startRow, 1).setValue('Overall Allocation Distribution');
-  sheet.getRange(startRow, 1).setFontSize(12).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
-  startRow += 2;
-
-  const allocBreakdownHeaders = ['Allocation Type', '% of Total', 'Story Points'];
-  sheet.getRange(startRow, 1, 1, allocBreakdownHeaders.length).setValues([allocBreakdownHeaders]);
-  sheet.getRange(startRow, 1, 1, allocBreakdownHeaders.length)
+  // Headers
+  const headers = ['Allocation Type', 'Planned Capacity', '% of Total', '', '', ''];
+  sheet.getRange(startRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(startRow, 1, 1, headers.length)
     .setFontWeight('bold')
     .setBackground('#9b7bb8')
     .setFontColor('white')
-    .setFontSize(8);
+    .setFontSize(10)
+    .setFontFamily('Comfortaa');
   startRow++;
 
-  // Calculate allocation percentages
-  const allocationTotals = {};
-  let totalPoints = 0;
+  // Calculate totals
+  const allocs = capacityData.allocations;
+  const productCapacity = (allocs.productFeature || 0) + (allocs.productCompliance || 0);
+  const techCapacity = allocs.techPlatform || 0;
+  const qualityCapacity = allocs.quality || 0;
+  const kloCapacity = allocs.klo || 0;
+  const unplannedCapacity = allocs.unplannedWork || 0;
 
-  stories.forEach(story => {
-    const points = story.storyPoints || 0;
-    if (points > 0) {
-      const category = mapAllocationToCategory(story.allocation);
-      allocationTotals[category] = (allocationTotals[category] || 0) + points;
-      totalPoints += points;
+  const totalCapacity = productCapacity + techCapacity + qualityCapacity + kloCapacity + unplannedCapacity;
+
+  // Helper to calculate percentage
+  const calcPercent = (value) => {
+    if (totalCapacity === 0) return '0%';
+    return Math.round((value / totalCapacity) * 100) + '%';
+  };
+
+  // Data rows with colors
+  const dataRows = [
+    { name: 'Product (Feature + Compliance)', value: productCapacity, color: '#1B365D' },
+    { name: 'Tech / Platform', value: techCapacity, color: '#6B3FA0' },
+    { name: 'Quality', value: qualityCapacity, color: '#4285F4' },
+    { name: 'KLO (Keep Lights On)', value: kloCapacity, color: '#FFC72C' },
+    { name: 'Unplanned Work', value: unplannedCapacity, color: '#9AA0A6' }
+  ];
+
+  const dataStartRow = startRow;
+
+  dataRows.forEach((row, index) => {
+    sheet.getRange(startRow, 1).setValue(row.name);
+    sheet.getRange(startRow, 2).setValue(Math.round(row.value));
+    sheet.getRange(startRow, 3).setValue(calcPercent(row.value));
+
+    // Color indicator in column 4
+    sheet.getRange(startRow, 4).setBackground(row.color);
+    sheet.getRange(startRow, 4).setValue('');
+
+    // Alternate row colors
+    if (index % 2 === 1) {
+      sheet.getRange(startRow, 1, 1, 3).setBackground('#f5f5f5');
     }
-  });
-
-  // Sort allocations by percentage
-  const sortedAllocations = Object.entries(allocationTotals)
-    .map(([category, points]) => ({
-      category: category,
-      points: points,
-      percentage: totalPoints > 0 ? Math.round((points / totalPoints) * 100) : 0
-    }))
-    .sort((a, b) => b.percentage - a.percentage);
-
-  // Write allocation breakdown
-  sortedAllocations.forEach(alloc => {
-    sheet.getRange(startRow, 1).setValue(alloc.category);
-    sheet.getRange(startRow, 2).setValue(`${alloc.percentage}%`);
-    sheet.getRange(startRow, 3).setValue(alloc.points);
-    sheet.getRange(startRow, 1, 1, 3).setFontSize(8);
-
-    // Color code based on allocation type
-    const cellColor = getAllocationColor(alloc.category);
-    sheet.getRange(startRow, 2).setBackground(cellColor);
 
     startRow++;
   });
 
-  return startRow;
+  // Total row
+  sheet.getRange(startRow, 1).setValue('TOTAL');
+  sheet.getRange(startRow, 2).setValue(Math.round(totalCapacity));
+  sheet.getRange(startRow, 3).setValue('100%');
+  sheet.getRange(startRow, 1, 1, 3)
+    .setFontWeight('bold')
+    .setBackground('#e0e0e0');
+  startRow++;
+
+  // Create pie chart
+  try {
+    const labelRange = sheet.getRange(dataStartRow, 1, dataRows.length, 1);
+    const valueRange = sheet.getRange(dataStartRow, 2, dataRows.length, 1);
+
+    const chart = sheet.newChart()
+      .setChartType(Charts.ChartType.PIE)
+      .addRange(labelRange)
+      .addRange(valueRange)
+      .setPosition(dataStartRow, 6, 0, 0)
+      .setOption('title', 'Capacity Distribution')
+      .setOption('width', 350)
+      .setOption('height', 200)
+      .setOption('pieSliceText', 'percentage')
+      .setOption('legend', { position: 'right', textStyle: { fontSize: 9 } })
+      .setOption('titleTextStyle', { fontSize: 11, bold: true })
+      .setOption('colors', dataRows.map(r => r.color))
+      .build();
+
+    sheet.insertChart(chart);
+  } catch (chartError) {
+    console.log(`Could not create pie chart: ${chartError.message}`);
+  }
+
+  return startRow + 1;
 }
 
-// ===== 9. CAPACITY FUNCTIONS =====
-function getCapacityDataDynamic(spreadsheet, issues, valueStream) {
-  try {
-    const capacitySheet = spreadsheet.getSheetByName('Capacity');
-    if (!capacitySheet) {
-      console.log('Capacity sheet not found');
-      return null;
-    }
+function createTeamAllocationChart(sheet, startRow, issues, scrumTeam) {
+  console.log(`Creating allocation chart for team: ${scrumTeam}`);
 
-    console.log(`\n=== Getting Capacity Data for Value Stream: ${valueStream} ===`);
+  const epics = issues.filter(i => i.issueType === 'Epic');
+  const stories = issues.filter(i => i.issueType !== 'Epic');
 
-    // DYNAMIC EXCLUSION: Get teams to exclude based on dependencies and context
-    const excludedTeams = getExcludedTeamsForContext(issues, valueStream);
+  // Title for chart section - Clear any existing formatting and fill ALL columns (A through O) with purple
+  sheet.getRange(startRow, 1, 1, 15).clearFormat(); // Clear any existing formatting first
+  sheet.getRange(startRow, 1).setValue('Allocation Analysis Chart');
+  sheet.getRange(startRow, 1, 1, 15).setBackground('#E1D5E7'); // Fill all 15 columns (A through O) with purple
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+  startRow++; // No space between title and table
 
-    // Get unique scrum teams from the issues, excluding teams based on context
-    const allTeams = [...new Set(issues.map(issue => issue.scrumTeam || 'Unassigned'))];
-    const scrumTeams = allTeams.filter(team => !isExcludedTeam(team, excludedTeams));
+  // Updated headers with new column names and additional columns
+  const chartHeaders = [
+    'Allocation Type', '', 'Baseline Capacity', 'PLANNED Allocation',
+    'PLANNED Availability', '% PLANNED Availability', 'Story points planned for PI',
+    'Current Availability', '% still available for PI',
+    'Capacity prior to Code Freeze', 'Remaining for Use overall prior to Code Freeze', '% availability prior to code freeze',
+    'Slotted code freeze capacity', 'Slotted Code Freeze Availability', '% Code Freeze Availability'
+  ];
 
-    console.log(`All teams found in issues: ${allTeams.join(', ')}`);
-    console.log(`Teams after dynamic exclusion filter: ${scrumTeams.join(', ')}`);
+  // Write headers
+  sheet.getRange(startRow, 1, 1, chartHeaders.length).setValues([chartHeaders]);
 
-    if (allTeams.length !== scrumTeams.length) {
-      console.log(`Dynamically excluded teams (not counted in capacity): ${excludedTeams.join(', ')}`);
-    }
+  // Format header row - CHANGED TO PURPLE (#9b7bb8)
+  sheet.getRange(startRow, 1, 1, chartHeaders.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')  // Purple color
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
 
-    const dataRange = capacitySheet.getDataRange();
-    const values = dataRange.getValues();
+  // Set header row height for wrapped text (max 70)
+  setRowHeightWithLimit(sheet, startRow, 50, 70);
 
-    if (values.length < 2) {
-      console.log('Capacity sheet has insufficient data');
-      return null;
-    }
+  // Center align headers for columns C through O (columns 3-15)
+  sheet.getRange(startRow, 3, 1, chartHeaders.length - 2).setHorizontalAlignment('center');
 
-    // The sheet structure has:
-    // Row 1: Title row (e.g., "Capacity Sheets")
-    // Row 2: Column headers - Scrum Team | Features | Tech/Platform | Planned KLO | Planned Quality | Unplanned
-    // Row 3+: Data rows (teams)
-    // Some rows may be totals or section headers - skip these
-    const headers = values[1]; // Second row contains the actual headers
+  // Add notes to headers (these will be re-added each refresh after clearing)
+  sheet.getRange(startRow, 3).setNote('Comes from Capacity planning sheet');
+  sheet.getRange(startRow, 13).setNote('Looking at sprint assigned');
+  sheet.getRange(startRow, 15).setNote('Looking at sprint assigned');
 
-    console.log(`Capacity sheet headers: ${headers.join(' | ')}`);
+  startRow++;
 
-    const capacityData = {
-      byTeam: {},
-      byAllocation: {},
-      total: 0
+  // Extract PI number from the sheet name
+  const sheetName = sheet.getName();
+  const piMatch = sheetName.match(/PI (\d+)/);
+  const piNumber = piMatch ? parseInt(piMatch[1]) : null;
+  const isPI11or12 = piNumber === 11 || piNumber === 12;
+
+  // Define allocation categories
+  const allocations = [
+    { name: 'Features (Product - Compliance & Feature)', capacityColumn: 'B', columnIndex: 2 },
+    { name: 'Tech / Platform', capacityColumn: 'C', columnIndex: 3 },
+    { name: 'Planned KLO', capacityColumn: 'D', columnIndex: 4 },
+    { name: 'Planned Quality', capacityColumn: 'E', columnIndex: 5 },
+    { name: 'Unplanned Quality', capacityColumn: 'F', columnIndex: 6, isUnplanned: true }
+  ];
+
+  // Calculate anticipated and current allocations
+  const allocationData = {};
+  allocations.forEach(alloc => {
+    allocationData[alloc.name] = {
+      anticipatedAllocation: 0,
+      currentCapacity: 0,
+      slottedCodeFreezeCapacity: 0
     };
+  });
 
-    // Initialize allocation totals from headers
-    for (let col = 1; col < headers.length; col++) {
-      const allocation = headers[col];
-      if (allocation && allocation.toString().trim() !== '') {
-        capacityData.byAllocation[allocation] = 0;
-      }
+  // Sum up allocations
+  epics.forEach(epic => {
+    const category = mapAllocationToCategory(epic.allocation); // mapAllocationToCategory is defined in the main config file
+    if (allocationData[category]) {
+      const featurePointValue = (epic.featurePoints || 0) * 10;
+      allocationData[category].anticipatedAllocation += featurePointValue;
     }
+  });
 
-    console.log(`\nProcessing capacity data rows...`);
+  stories.forEach(story => {
+    const category = mapAllocationToCategory(story.allocation); // mapAllocationToCategory is defined in the main config file
+    if (allocationData[category]) {
+      const storyPointValue = story.storyPoints || 0;
+      allocationData[category].currentCapacity += storyPointValue;
 
-    // Process data rows (starting from row 3, index 2)
-    for (let i = 2; i < values.length; i++) {
-      const team = values[i][0];
+      // Check if sprint meets code freeze criteria
+      if (story.sprintName) {
+        // Try multiple patterns to match sprint names
+        const patterns = [
+          new RegExp(`PI\\s*${piNumber}\\s*\\.\\s*([1-5])`, 'i'),  // "PI 12.1" format
+          new RegExp(`${piNumber}\\s*\\.\\s*([1-5])`, 'i'),        // "12.1" format
+          new RegExp(`\\b${piNumber}\\.([1-5])\\b`)              // Strict "12.1" format
+        ];
 
-      // Skip if empty row
-      if (!team || team.toString().trim() === '') {
-        continue;
-      }
-
-      // Skip if team is a total row or section header
-      const teamStr = team.toString().toLowerCase();
-      if (teamStr.includes('total') ||
-          teamStr.includes('pulled directly') ||
-          teamStr.includes('capacity sheet')) {
-        console.log(`  Skipping row ${i + 1}: "${team}" (total/header row)`);
-        continue;
-      }
-
-      // Skip if team not in our filtered list (after dynamic exclusion)
-      if (!scrumTeams.includes(team)) {
-        if (allTeams.includes(team)) {
-          console.log(`  Skipping team "${team}": Excluded due to cross-value-stream dependencies`);
-        } else {
-          console.log(`  Skipping team "${team}": Not found in issues`);
+        let matched = false;
+        for (const pattern of patterns) {
+          const match = story.sprintName.match(pattern);
+          if (match) {
+            const iteration = parseInt(match[1]);
+            if (iteration >= 1 && iteration <= 5) {
+              allocationData[category].slottedCodeFreezeCapacity += storyPointValue;
+              matched = true;
+              break;
+            }
+          }
         }
-        continue;
-      }
 
-      // Initialize team data
-      capacityData.byTeam[team] = {};
-      let teamTotal = 0;
-
-      // Get capacity values for each allocation type
-      for (let col = 1; col < headers.length; col++) {
-        const allocation = headers[col];
-        if (allocation && allocation.toString().trim() !== '') {
-          const value = parseFloat(values[i][col]) || 0;
-          capacityData.byTeam[team][allocation] = value;
-          capacityData.byAllocation[allocation] += value;
-          teamTotal += value;
-          capacityData.total += value;
+        if (!matched && story.sprintName.toLowerCase().includes(`${piNumber}.`)) {
+          console.log(`Sprint not matched for slotted capacity: ${story.sprintName}`);
         }
       }
+    }
+  });
 
-      capacityData.byTeam[team].total = teamTotal;
-      console.log(`  ✅ Team "${team}": ${teamTotal} total capacity`);
+  // Add borders for the sections
+  const borderStartRow = startRow;
+  const borderEndRow = startRow + allocations.length;
+
+  // Feature point allocation frame
+  sheet.getRange(borderStartRow - 1, 4, allocations.length + 1, 3).setBorder(
+    true, true, true, true, false, false, '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // Ticket/Story point break down frame
+  sheet.getRange(borderStartRow - 1, 7, allocations.length + 1, 3).setBorder(
+    true, true, true, true, false, false, '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // All iteration allocation frame (was "All Story points")
+  sheet.getRange(borderStartRow - 1, 10, allocations.length + 1, 3).setBorder(
+    true, true, true, true, false, false, '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // Iteration allocation prior to code freeze frame (was "Sprint prior to Code Freeze")
+  sheet.getRange(borderStartRow - 1, 13, allocations.length + 1, 3).setBorder(
+    true, true, true, true, false, false, '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  // Write data rows
+  allocations.forEach((alloc, index) => {
+    const rowNum = startRow + index;
+    const data = allocationData[alloc.name];
+
+    // Apply alternating row background - white and light grey for entire row
+    if (index % 2 === 0) {
+      sheet.getRange(rowNum, 1, 1, chartHeaders.length).setBackground('#ffffff'); // White for even rows
+    } else {
+      sheet.getRange(rowNum, 1, 1, chartHeaders.length).setBackground('#f5f5f5'); // Light grey for odd rows
     }
 
-    console.log(`\n=== Capacity Summary ===`);
-    console.log(`Total capacity: ${capacityData.total} points`);
-    console.log(`Teams included (${Object.keys(capacityData.byTeam).length}): ${Object.keys(capacityData.byTeam).join(', ')}`);
-    console.log(`Allocation breakdown:`, capacityData.byAllocation);
-    console.log('=== End Capacity Data ===\n');
+    // Set allocation type - NO WRAP for column A
+    sheet.getRange(rowNum, 1).setValue(alloc.name);
+    sheet.getRange(rowNum, 1).setWrap(false);  // Turn off text wrapping
 
-    return capacityData;
+    // Set FORMULA for planned capacity with flexible team name matching
+    // This formula handles case differences and attempts to match team names flexibly
+    const capacityFormula = `=IFERROR(INDEX(Capacity!${alloc.capacityColumn}:${alloc.capacityColumn},MATCH(UPPER(TRIM("${scrumTeam}")),ARRAYFORMULA(UPPER(TRIM(Capacity!A:A))),0)),0)`;
+    sheet.getRange(rowNum, 3).setFormula(capacityFormula);
 
-  } catch (error) {
-    console.error('Error reading dynamic capacity data:', error);
-    console.error('Stack trace:', error.stack);
-    return null;
-  }
-}
+    // Handle Unplanned Quality row differently
+    if (alloc.isUnplanned) {
+      // Leave all columns blank from D to O but maintain row background
+      sheet.getRange(rowNum, 4, 1, 12).setValue('');
+    } else {
+      // Normal row processing
+      sheet.getRange(rowNum, 4).setValue(data.anticipatedAllocation);
 
-function getCapacityAllocationCategories(spreadsheet) {
-  try {
-    const capacitySheet = spreadsheet.getSheetByName('Capacity');
-    if (!capacitySheet) {
-      return null;
+      sheet.getRange(rowNum, 5).setFormula(`=C${rowNum}-D${rowNum}`);
+      sheet.getRange(rowNum, 6).setFormula(`=IF(C${rowNum}>0,ROUND(E${rowNum}/C${rowNum}*100,0)&"%","0%")`);
+
+      sheet.getRange(rowNum, 7).setValue(data.currentCapacity);
+      sheet.getRange(rowNum, 8).setFormula(`=C${rowNum}-G${rowNum}`);
+      sheet.getRange(rowNum, 9).setFormula(`=IF(C${rowNum}>0,ROUND(H${rowNum}/C${rowNum}*100,0)&"%","0%")`);
+
+      // Column J formulas based on allocation type
+      if (alloc.name === 'Features (Product - Compliance & Feature)') {
+        sheet.getRange(rowNum, 10).setFormula(`=C18`);
+      } else if (alloc.name === 'Tech / Platform') {
+        sheet.getRange(rowNum, 10).setFormula(`=F18`);
+      } else if (alloc.name === 'Planned KLO') {
+        sheet.getRange(rowNum, 10).setFormula(`=ROUND((C28/13)*8,0)`);
+      } else if (alloc.name === 'Planned Quality') {
+        sheet.getRange(rowNum, 10).setFormula(`=I18`);
+      } else {
+        // For other rows, use the old formula
+        const codeFreezeMultiplier = isPI11or12 ? 8 : 10;
+        sheet.getRange(rowNum, 10).setFormula(`=ROUND(C${rowNum}/13*${codeFreezeMultiplier},0)`);
+      }
+
+      sheet.getRange(rowNum, 11).setFormula(`=J${rowNum}-G${rowNum}`);
+      sheet.getRange(rowNum, 12).setFormula(`=IF(J${rowNum}>0,ROUND(K${rowNum}/J${rowNum}*100,0)&"%","0%")`);
+
+      // New columns for slotted code freeze
+      sheet.getRange(rowNum, 13).setValue(data.slottedCodeFreezeCapacity);
+      sheet.getRange(rowNum, 14).setFormula(`=J${rowNum}-M${rowNum}`);
+      sheet.getRange(rowNum, 15).setFormula(`=IF(J${rowNum}>0,ROUND(N${rowNum}/J${rowNum}*100,0)&"%","0%")`);
+
+      // Override columns D and F with darker grey (always)
+      sheet.getRange(rowNum, 4).setBackground('#d3d3d3'); // Column D - dark grey
+      sheet.getRange(rowNum, 6).setBackground('#d3d3d3'); // Column F - dark grey
     }
+  });
 
-    const dataRange = capacitySheet.getDataRange();
-    const values = dataRange.getValues();
+  // Set font size for data rows and wrap text (except column A)
+  sheet.getRange(startRow, 1, allocations.length, 1).setFontSize(8).setWrap(false).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+  sheet.getRange(startRow, 2, allocations.length, chartHeaders.length - 1).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
 
-    if (values.length < 2) {
-      return null;
-    }  // ✅ Fixed: Was "   }" (3 spaces), now "    }" (4 spaces)
+  // IMPORTANT: Set number format for columns D and E (and other numeric columns) to prevent % auto-formatting
+  sheet.getRange(startRow, 3, allocations.length, 1).setNumberFormat('0');  // Column C - Baseline Capacity
+  sheet.getRange(startRow, 4, allocations.length, 1).setNumberFormat('0');  // Column D - PLANNED Allocation
+  sheet.getRange(startRow, 5, allocations.length, 1).setNumberFormat('0');  // Column E - PLANNED Availability
+  sheet.getRange(startRow, 7, allocations.length, 1).setNumberFormat('0');  // Column G - Story points planned
+  sheet.getRange(startRow, 8, allocations.length, 1).setNumberFormat('0');  // Column H - Current Availability
+  sheet.getRange(startRow, 10, allocations.length, 1).setNumberFormat('0'); // Column J - Capacity prior to CF
+  sheet.getRange(startRow, 11, allocations.length, 1).setNumberFormat('0'); // Column K - Remaining for Use
+  sheet.getRange(startRow, 13, allocations.length, 1).setNumberFormat('0'); // Column M - Slotted CF capacity
+  sheet.getRange(startRow, 14, allocations.length, 1).setNumberFormat('0'); // Column N - Slotted CF Availability
 
-    // Get headers from row 2 (index 1)
-    const headers = values[1];
-
-    // Skip the first column (Team) and return the rest
-    const categories = headers.slice(1).filter(h => h && h.toString().trim() !== '');
-
-    console.log('Allocation categories from Capacity sheet:', categories);
-    return categories;
-
-  } catch (error) {
-    console.error('Error getting allocation categories:', error);
-    return null;
+  // Set standard row height for data rows
+  for (let i = 0; i < allocations.length; i++) {
+    setRowHeightWithLimit(sheet, startRow + i, 25, 70);
   }
+
+  // Center align all data columns
+  sheet.getRange(startRow, 3, allocations.length, 13).setHorizontalAlignment('center');
+
+  // Apply light blue background to column C for all data rows
+  sheet.getRange(startRow, 3, allocations.length, 1).setBackground('#e6f2ff');
+
+  // Apply light blue background to column J for data rows (J26:J30)
+  sheet.getRange(startRow, 10, allocations.length, 1).setBackground('#e6f2ff');
+
+  // Apply conditional formatting to variance cells AFTER row backgrounds
+  for (let i = 0; i < allocations.length; i++) {
+    const row = startRow + i;
+    const alloc = allocations[i];
+
+    if (!alloc.isUnplanned) {
+      SpreadsheetApp.flush();
+
+      const anticipatedValue = sheet.getRange(row, 5).getValue();
+      if (typeof anticipatedValue === 'number') {
+        sheet.getRange(row, 5).setBackground(anticipatedValue >= 0 ? '#ccffcc' : '#ffcccc');
+      }
+
+      const currentValue = sheet.getRange(row, 8).getValue();
+      if (typeof currentValue === 'number') {
+        sheet.getRange(row, 8).setBackground(currentValue >= 0 ? '#ccffcc' : '#ffcccc');
+      }
+
+      const remainingValue = sheet.getRange(row, 11).getValue();
+      if (typeof remainingValue === 'number') {
+        sheet.getRange(row, 11).setBackground(remainingValue >= 0 ? '#ccffcc' : '#ffcccc');
+      }
+
+      const slottedValue = sheet.getRange(row, 14).getValue();
+      if (typeof slottedValue === 'number') {
+        sheet.getRange(row, 14).setBackground(slottedValue >= 0 ? '#ccffcc' : '#ffcccc');
+      }
+    }
+  }
+
+  // Set all column widths to 100
+  for (let col = 1; col <= chartHeaders.length; col++) {
+    sheet.setColumnWidth(col, 100);
+  }
+
+  startRow += allocations.length;
+
+  // Add TOTALS row - using darker grey background
+  const totalRow = startRow + 1;  // Skip one row as requested
+
+  // Set TOTAL in column A
+  sheet.getRange(totalRow, 1).setValue('TOTAL');
+  sheet.getRange(totalRow, 1).setWrap(false);  // No wrap for TOTAL cell
+
+  // Apply darker grey background to columns D through O in totals row
+  sheet.getRange(totalRow, 4, 1, 12).setBackground('#808080'); // Dark gray for D through O
+
+  // Keep column B and C with lighter grey
+  sheet.getRange(totalRow, 2, 1, 2).setBackground('#d3d3d3');
+
+  // Fixed formulas for totals
+  const firstDataRow = totalRow - allocations.length - 1;
+  const lastDataRow = totalRow - 2;
+
+  // Sum formulas for numeric columns only (not percentage columns)
+  sheet.getRange(totalRow, 3).setFormula(`=SUM(C${firstDataRow}:C${lastDataRow})`); // Planned Capacity
+  sheet.getRange(totalRow, 4).setFormula(`=SUM(D${firstDataRow}:D${lastDataRow - 1})`); // Anticipated Allocation (exclude unplanned)
+  sheet.getRange(totalRow, 7).setFormula(`=SUM(G${firstDataRow}:G${lastDataRow})`); // Story points planned
+  sheet.getRange(totalRow, 10).setFormula(`=SUM(J${firstDataRow}:J${lastDataRow - 1})`); // Capacity prior to Code Freeze (exclude unplanned)
+  sheet.getRange(totalRow, 13).setFormula(`=SUM(M${firstDataRow}:M${lastDataRow})`); // Slotted code freeze capacity
+
+  // Leave percentage and variance columns blank
+  sheet.getRange(totalRow, 5).setValue(''); // Anticipated Variance
+  sheet.getRange(totalRow, 6).setValue(''); // % Anticipated Variance
+  sheet.getRange(totalRow, 8).setValue(''); // Current Variance
+  sheet.getRange(totalRow, 9).setValue(''); // % still available
+  sheet.getRange(totalRow, 11).setValue(''); // Remaining overall
+  sheet.getRange(totalRow, 12).setValue(''); // % availability
+  sheet.getRange(totalRow, 14).setValue(''); // Slotted variance
+  sheet.getRange(totalRow, 15).setValue(''); // % Code Freeze Availability
+
+  // Format TOTALS row
+  sheet.getRange(totalRow, 1, 1, chartHeaders.length).setFontWeight('bold').setFontSize(8).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+  sheet.getRange(totalRow, 3, 1, 13).setHorizontalAlignment('center');
+  sheet.getRange(totalRow, 3).setNumberFormat('0'); // Ensure numeric format
+  sheet.getRange(totalRow, 4).setNumberFormat('0');
+  sheet.getRange(totalRow, 7).setNumberFormat('0');
+  sheet.getRange(totalRow, 10).setNumberFormat('0');
+  sheet.getRange(totalRow, 13).setNumberFormat('0');
+
+  // Apply light blue background to column C for totals row
+  sheet.getRange(totalRow, 3).setBackground('#e6f2ff');
+
+  // Apply light blue background to column J for totals row
+  sheet.getRange(totalRow, 10).setBackground('#e6f2ff');
+
+  // Set row height for totals row
+  setRowHeightWithLimit(sheet, totalRow, 25, 70);
+
+  // CREATE NAMED RANGE for total story points (G column of totals row)
+  const spreadsheet = sheet.getParent();
+  const storyPointsCell = sheet.getRange(totalRow, 7); // Column G of totals row
+
+  // Create a unique named range for this team
+  const namedRangeName = `TotalStoryPoints_${scrumTeam.replace(/[\s-]/g, '_')}`;
+
+  // Remove existing named range if it exists
+  try {
+    const existingRange = spreadsheet.getRangeByName(namedRangeName);
+    if (existingRange) {
+      spreadsheet.removeNamedRange(namedRangeName);
+    }
+  } catch (e) {
+    // Named range doesn't exist, that's fine
+  }
+
+  // Create the new named range
+  spreadsheet.setNamedRange(namedRangeName, storyPointsCell);
+  console.log(`Created named range ${namedRangeName} for cell G${totalRow}`);
+
+  // Return both the next row and the totals row number
+  return {
+    nextRow: totalRow + 1,
+    totalsRow: totalRow
+  };
 }
 
 
-// ===== 10. MAIN ANALYSIS FUNCTIONS =====
-function analyzeSelectedValueStreams(piNumber, selectedValueStreams, options = {}) {
-  const ui = SpreadsheetApp.getUi();
-  const programIncrement = `PI ${piNumber}`;
+function createEpicsSlottedByIteration(sheet, startRow, issues, scrumTeam, programIncrement) {
+  console.log(`Creating Epics slotted by Iteration chart for ${scrumTeam}`);
 
-  try {
-    showProgress(`Starting analysis for ${programIncrement} across all projects...`);
+  // Extract PI number
+  const piNumber = parseInt(programIncrement.replace('PI ', ''));
+  if (isNaN(piNumber)) {
+    console.error('Invalid PI number in programIncrement:', programIncrement);
+    return startRow;
+  }
 
-    const cacheResponse = ui.alert(
-      'Data Source',
-      'Choose your data source:\n\n' +
-      '[OK] YES = Use Cache (faster, uses recently fetched data)\n' +
-      '[OK] NO = Refresh from JIRA (slower, gets the latest data)',
-      ui.ButtonSet.YES_NO
+  // Filter epics and stories/bugs - UPDATED
+  const epics = issues.filter(i => i.issueType === 'Epic');
+  const stories = issues.filter(i => i.issueType === 'Story' || i.issueType === 'Bug'); // UPDATED: Include Bug type
+
+  if (epics.length === 0) {
+    console.log('No epics found for Epics slotted by Iteration chart');
+    return startRow;
+  }
+
+  // Title - fill columns A through K with purple
+  sheet.getRange(startRow, 1).setValue('Epics slotted by Iteration');
+  sheet.getRange(startRow, 1, 1, 11).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+
+  const headerRow = startRow + 1;
+
+  // Headers
+  const headers = [
+    'Key', 'Summary', 'Iteration 1', 'Iteration 2', 'Iteration 3',
+    'Iteration 4', 'Iteration 5', 'Iteration 6', 'Total Slotted',
+    'Unslotted Points', 'Tickets Without Points'
+  ];
+
+  sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(headerRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+
+  setRowHeightWithLimit(sheet, headerRow, 40, 70);
+
+  // Set column widths
+  sheet.setColumnWidth(1, 100);  // Key
+  sheet.setColumnWidth(2, 300);  // Summary (wider)
+  for (let col = 3; col <= headers.length; col++) {
+    sheet.setColumnWidth(col, 100);
+  }
+
+  const dataStartRow = headerRow + 1;
+
+  // Process each epic
+  const epicData = [];
+
+  epics.forEach(epic => {
+    // Find stories for this epic
+    const epicStories = stories.filter(s =>
+      s.parentKey === epic.key || s.epicLink === epic.key
     );
 
-const forceRefresh = (cacheResponse === ui.Button.NO);
+    // Initialize iteration data
+    const iterationData = {
+      1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0,
+      unslotted: 0,
+      ticketsWithoutPoints: 0,
+      totalSlotted: 0
+    };
 
-    if (forceRefresh) {
-      CacheManager.clearPI(piNumber);
-    }
-
-    const cacheKey = `pi_analysis_${piNumber}_${selectedValueStreams.join('_')}`;
-    let allIssues = [];
-    let summaryData = [];
-    let duplicateCount = 0;
-
-    if (!forceRefresh && CacheManager.isEnabled()) {
-      const cachedData = CacheManager.get(cacheKey);
-      if (cachedData && cachedData.timestamp > Date.now() - (CacheManager.CACHE_EXPIRATION_MINUTES * 60 * 1000)) {
-        showProgress('Using cached data...');
-        allIssues = cachedData.allIssues;
-        summaryData = cachedData.summaryData;
-        duplicateCount = cachedData.duplicateCount || 0;
-
-        ui.alert('Using Cached Data',
-          `Using cached data from ${new Date(cachedData.timestamp).toLocaleTimeString()}\n` +
-          `Cache expires in ${Math.round((cachedData.timestamp + (CacheManager.CACHE_EXPIRATION_MINUTES * 60 * 1000) - Date.now()) / 60000)} minutes.`,
-          ui.ButtonSet.OK
-        );
-      }
-    }
-
-    if (allIssues.length === 0) {
-      showProgress('Fetching fresh data from JIRA across all projects...');
-
-      showProgress('Fetching dependencies for value streams...');
-      const dependencyResults = fetchDependenciesForAllValueStreams(selectedValueStreams, programIncrement);
-
-      let totalDependencyCount = 0;
-      dependencyResults.forEach((result, index) => {
-        console.log(`${selectedValueStreams[index]}: ${result.dependencies.length} dependencies found`);
-        totalDependencyCount += result.dependencies.length;
-      });
-
-      if (totalDependencyCount > 0) {
-        showProgress(`Found ${totalDependencyCount} dependencies across all value streams.`);
-      }
-
-      const epicResults = fetchEpicsForAllValueStreams(selectedValueStreams, programIncrement);
-
-      let totalEpicCount = 0;
-      epicResults.forEach((result, index) => {
-        console.log(`${selectedValueStreams[index]}: ${result.epics.length} epics found across all projects`);
-        totalEpicCount += result.epics.length;
-      });
-
-      if (totalEpicCount === 0 && totalDependencyCount === 0) {
-        closeProgress();
-        ui.alert('No Data Found', `No epics or dependencies found for PI ${piNumber} in the selected value streams across any projects.`, ui.ButtonSet.OK);
+    // Process each story
+    epicStories.forEach(story => {
+      // Count stories without points
+      if (!story.storyPoints || story.storyPoints === 0) {
+        iterationData.ticketsWithoutPoints++;
         return;
       }
 
-      showProgress(`Found ${totalEpicCount} epics across all projects. Fetching child issues...`);
+      const storyPoints = story.storyPoints;
+      let slotted = false;
 
-      const childResults = fetchChildIssuesInBatchesOptimized(epicResults);
+      // Check if story has a sprint
+      if (story.sprintName) {
+        // Try multiple patterns to match sprint names (same as calculateSlottedData)
+        const patterns = [
+          new RegExp(`PI\\s*${piNumber}\\s*\\.\\s*(\\d)`, 'i'),  // "PI 12.1" format
+          new RegExp(`${piNumber}\\s*\\.\\s*(\\d)`, 'i'),        // "12.1" format
+          new RegExp(`\\b${piNumber}\\.(\\d)\\b`)                // Strict "12.1" format
+        ];
 
-      showProgress('Processing results...');
-
-      for (let vsIndex = 0; vsIndex < epicResults.length; vsIndex++) {
-        const epicResult = epicResults[vsIndex];
-        const valueStream = selectedValueStreams[vsIndex];
-        const vsIssues = [];
-
-        showProgress(`Processing ${valueStream} (${vsIndex + 1}/${selectedValueStreams.length})...`);
-
-        if (dependencyResults[vsIndex] && dependencyResults[vsIndex].dependencies) {
-          const dependencies = dependencyResults[vsIndex].dependencies;
-
-          dependencies.forEach(dependency => {
-            vsIssues.push(processDependencyData(dependency, valueStream));
-          });
-
-          console.log(`Added ${dependencies.length} dependencies for ${valueStream}`);
-        }
-
-        for (let epicIndex = 0; epicIndex < epicResult.epics.length; epicIndex++) {
-          const epic = epicResult.epics[epicIndex];
-
-          if (epicIndex % 10 === 0) {
-            showProgress(`Processing ${valueStream}: Epic ${epicIndex + 1}/${epicResult.epics.length}...`);
-          }
-
-          const epicChildren = childResults[epic.key] || [];
-          const loeEstimate = epicChildren.reduce((sum, child) => {
-            if (child.issueType === 'Story' || child.issueType === 'Bug') {
-              return sum + (parseFloat(child.storyPoints) || 0);
-            }
-            return sum;
-          }, 0);
-
-          vsIssues.push({
-            ...epic,
-            issueType: 'Epic',
-            parentKey: '',
-            loeEstimate: loeEstimate,
-            analyzedValueStream: valueStream
-          });
-
-          epicChildren.forEach(child => {
-            vsIssues.push({
-              ...child,
-              parentKey: epic.key,
-              loeEstimate: 0,
-              storyPointEstimate: parseFloat(child.storyPointEstimate) || 0,
-              analyzedValueStream: valueStream
-            });
-          });
-        }
-
-        allIssues = allIssues.concat(vsIssues);
-        allIssues = validateAndCleanJiraData(allIssues);
-
-        const dependencyCount = dependencyResults[vsIndex] ? dependencyResults[vsIndex].dependencies.length : 0;
-
-        summaryData.push({
-          valueStream: valueStream,
-          epicCount: epicResult.epics.length,
-          dependencyCount: dependencyCount,
-          storyCount: vsIssues.filter(i => i.issueType !== 'Epic' && i.issueType !== 'Dependency').length,
-          totalIssues: vsIssues.length,
-          error: epicResult.error
-        });
-      }
-
-      if (CacheManager.isEnabled()) {
-        CacheManager.set(cacheKey, {
-          allIssues: allIssues,
-          summaryData: summaryData,
-          duplicateCount: duplicateCount,
-          timestamp: Date.now()
-        });
-      }
-    }
-
-    console.log(`Total issues to write: ${allIssues.length}`);
-
-    showProgress('Preparing spreadsheet...');
-    const spreadsheet = options.targetSpreadsheet || SpreadsheetApp.getActiveSpreadsheet();
-    const sheetName = `PI ${piNumber}`;
-
-    let piSheet = spreadsheet.getSheetByName(sheetName);
-    let existingData = [];
-
-    if (piSheet) {
-      showProgress('Reading and cleaning existing data...');
-      const dataRange = piSheet.getDataRange();
-      const values = dataRange.getValues();
-
-      if (values.length > 4) {
-        const headers = values[3];
-        const analyzedVSIndex = headers.indexOf('Analyzed Value Stream');
-        const valueStreamIndex = headers.indexOf('Value Stream');
-
-        const vsIndex = analyzedVSIndex !== -1 ? analyzedVSIndex : valueStreamIndex;
-
-        if (vsIndex !== -1) {
-          for (let i = 4; i < values.length; i++) {
-            const row = values[i];
-            const rowValueStream = row[vsIndex];
-
-            if (rowValueStream && !selectedValueStreams.includes(rowValueStream)) {
-              const parsedRow = parsePISheetRow(row, headers);
-              if (parsedRow) {
-                const cleanRow = createDataRow(parsedRow, false, row[headers.indexOf('Row Last Updated')] || '');
-                existingData.push(cleanRow);
-              }
+        for (const pattern of patterns) {
+          const match = story.sprintName.match(pattern);
+          if (match) {
+            const iteration = parseInt(match[1]);
+            if (iteration >= 1 && iteration <= 6) {
+              iterationData[iteration] += storyPoints;
+              iterationData.totalSlotted += storyPoints;
+              slotted = true;
+              break;
             }
           }
-
-          console.log(`Preserving ${existingData.length} rows from other value streams (cleaned)`);
         }
       }
 
-      piSheet.clear();
+      // If not slotted to an iteration, count as unslotted
+      if (!slotted) {
+        iterationData.unslotted += storyPoints;
+      }
+    });
+
+    epicData.push({
+      key: epic.key,
+      summary: epic.summary || '',
+      iterations: iterationData,
+      url: epic.url,
+      costOfDelay: parseCostOfDelay(epic.costOfDelay) // For sorting
+    });
+  });
+
+  // Sort by Cost of Delay (descending) to match All Epics for Planning order
+  epicData.sort((a, b) => b.costOfDelay - a.costOfDelay);
+
+  // Write data rows
+  epicData.forEach((epic, index) => {
+    const rowNum = dataStartRow + index;
+
+    // Apply alternating row colors
+    if (index % 2 === 0) {
+      sheet.getRange(rowNum, 1, 1, headers.length).setBackground('#ffffff');
     } else {
-      piSheet = spreadsheet.insertSheet(sheetName);
+      sheet.getRange(rowNum, 1, 1, headers.length).setBackground('#f5f5f5');
     }
 
-    allIssues = validateAndCleanJiraData(allIssues);
+    // Key (with hyperlink) - JIRA_CONFIG.baseUrl is defined in the main config file
+    const epicKeyFormula = `=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${epic.key}","${epic.key}")`;
+    sheet.getRange(rowNum, 1).setFormula(epicKeyFormula);
 
-    showProgress('Writing data to sheet...');
-    writeConsolidatedDataWithExistingWithHyperlinks(piSheet, allIssues, existingData, programIncrement);
+    // Summary
+    sheet.getRange(rowNum, 2).setValue(epic.summary);
+    sheet.getRange(rowNum, 2).setWrap(true);
 
-    showProgress('Updating scrum team summaries...');
-
-    SpreadsheetApp.flush();
-
-    const completeDataRange = piSheet.getDataRange();
-    const completeValues = completeDataRange.getValues();
-    const completeHeaders = completeValues[3];
-    const completeIssues = parsePISheetData(completeValues, completeHeaders);
-
-    const updatedScrumTeams = new Set();
-    allIssues.forEach(issue => {
-      if (issue.scrumTeam) {
-        updatedScrumTeams.add(issue.scrumTeam);
+    // Iteration columns (3-8)
+    for (let iter = 1; iter <= 6; iter++) {
+      const value = epic.iterations[iter];
+      if (value > 0) {
+        sheet.getRange(rowNum, 2 + iter).setValue(value);
       }
-    });
-
-    let teamUpdatedCount = 0;
-
-    updatedScrumTeams.forEach(team => {
-      const summarySheetName = `${programIncrement} - ${team} Summary`;
-      const summarySheet = spreadsheet.getSheetByName(summarySheetName);
-
-      if (summarySheet) {
-        showProgress(`Updating scrum team summary: ${team}`);
-        try {
-          const teamIssues = completeIssues.filter(issue =>
-            issue.scrumTeam === team
-          );
-
-          createScrumTeamSummary(teamIssues, programIncrement, team, spreadsheet);
-          teamUpdatedCount++;
-        } catch (error) {
-          console.error(`Error updating summary for team ${team}:`, error);
-        }
+      // Apply light green background if has points
+      if (value > 0) {
+        sheet.getRange(rowNum, 2 + iter).setBackground('#e6ffe6');
       }
-    });
-
-    showProgress('Updating value stream summaries...');
-    const allValueStreams = [...new Set(completeIssues.map(i => i.analyzedValueStream || i.valueStream).filter(vs => vs))];
-
-    let vsUpdatedCount = 0;
-
-    allValueStreams.forEach(vs => {
-      const summarySheetName = `${programIncrement} Summary - ${vs}`;
-      const summarySheet = spreadsheet.getSheetByName(summarySheetName);
-
-      if (summarySheet) {
-        showProgress(`Updating value stream summary: ${vs}`);
-        try {
-          const vsFilteredIssues = completeIssues.filter(issue =>
-            issue.analyzedValueStream === vs || issue.valueStream === vs
-          );
-
-          createValueStreamSummaryEnhanced(vsFilteredIssues, programIncrement, vs, spreadsheet);
-          vsUpdatedCount++;
-        } catch (error) {
-          console.error(`Error updating summary for ${vs}:`, error);
-        }
-      }
-    });
-
-    try {
-      showProgress('Updating all formulas in summary sheets...');
-      forceRecalculateSummaryFormulas(spreadsheet, programIncrement);
-    } catch (error) {
-      console.error('Error refreshing summary formulas:', error);
     }
 
-    closeProgress();
+    // Total Slotted (column 9)
+    sheet.getRange(rowNum, 9).setValue(epic.iterations.totalSlotted);
+    sheet.getRange(rowNum, 9).setFontWeight('bold');
 
-    const totalEpics = allIssues.filter(i => i.issueType === 'Epic').length;
-    const totalStories = allIssues.filter(i => i.issueType !== 'Epic').length;
-
-    const issueTypeCounts = {
-      Epic: allIssues.filter(i => i.issueType === 'Epic').length,
-      Story: allIssues.filter(i => i.issueType === 'Story').length,
-      Bug: allIssues.filter(i => i.issueType === 'Bug').length,
-      Task: allIssues.filter(i => i.issueType === 'Task').length,
-      Risk: allIssues.filter(i => i.issueType === 'Risk').length,
-      Dependency: allIssues.filter(i => i.issueType === 'Dependency').length,
-      DevDefect: allIssues.filter(i => i.issueType === 'DevDefect').length
-    };
-
-    const completionMessage = `Analysis Complete for ${programIncrement}!\n\n` +
-      `Value Streams Updated: ${selectedValueStreams.join(', ')}\n\n` +
-      `Issue Type Breakdown:\n` +
-      `- Epics: ${issueTypeCounts.Epic}\n` +
-      `- Stories: ${issueTypeCounts.Story} (used for planning)\n` +
-      `- Bugs: ${issueTypeCounts.Bug} (used for planning)\n` +
-      `- Tasks: ${issueTypeCounts.Task}\n` +
-      `- Risks: ${issueTypeCounts.Risk}\n` +
-      `- Dependencies: ${issueTypeCounts.Dependency}\n` +
-      `- DevDefects: ${issueTypeCounts.DevDefect}\n` +
-      `\nTotal Issues: ${allIssues.length}\n` +
-      (duplicateCount > 0 ? `Duplicates Removed: ${duplicateCount}\n` : '') +
-      `\nSummary Sheets Updated:\n` +
-      `- Value Stream Summaries: ${vsUpdatedCount}\n` +
-      `- Scrum Team Summaries: ${teamUpdatedCount} (auto-updated)\n` +
-      `\nData sourced from: ALL projects in JIRA`;
-
-    if (!options.suppressCompletionAlert) {
-      ui.alert('Success', completionMessage, ui.ButtonSet.OK);
-    } else {
-      console.log('Analysis complete (external destination):\n' + completionMessage);
+    // Unslotted Points (column 10)
+    if (epic.iterations.unslotted > 0) {
+      sheet.getRange(rowNum, 10).setValue(epic.iterations.unslotted);
+      sheet.getRange(rowNum, 10).setBackground('#fff3cd'); // Light yellow warning
     }
 
-  } catch (error) {
-    console.error('Error in analyzeSelectedValueStreams:', error);
-    closeProgress();
-    ui.alert('Error', 'An error occurred: ' + error.toString(), ui.ButtonSet.OK);
+    // Tickets Without Points (column 11)
+    if (epic.iterations.ticketsWithoutPoints > 0) {
+      sheet.getRange(rowNum, 11).setValue(epic.iterations.ticketsWithoutPoints);
+      sheet.getRange(rowNum, 11).setBackground('#ffcccc'); // Light red warning
+    }
+  });
+
+  // Format data area
+  if (epicData.length > 0) {
+    sheet.getRange(dataStartRow, 1, epicData.length, headers.length)
+      .setFontSize(8)
+      .setWrap(true)
+      .setFontFamily('Comfortaa')
+      .setVerticalAlignment('middle');
+
+    // Center align numeric columns (3-11)
+    sheet.getRange(dataStartRow, 3, epicData.length, 9).setHorizontalAlignment('center');
+
+    // Set reasonable row heights
+    for (let i = 0; i < epicData.length; i++) {
+      setRowHeightWithLimit(sheet, dataStartRow + i, 30, 70);
+    }
   }
+
+  // Add totals row
+  const totalsRow = dataStartRow + epicData.length + 1;
+
+  // Calculate totals
+  const totals = {
+    1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0,
+    totalSlotted: 0,
+    unslotted: 0,
+    ticketsWithoutPoints: 0
+  };
+
+  epicData.forEach(epic => {
+    for (let iter = 1; iter <= 6; iter++) {
+      totals[iter] += epic.iterations[iter];
+    }
+    totals.totalSlotted += epic.iterations.totalSlotted;
+    totals.unslotted += epic.iterations.unslotted;
+    totals.ticketsWithoutPoints += epic.iterations.ticketsWithoutPoints;
+  });
+
+  // Write totals row
+  sheet.getRange(totalsRow, 1).setValue('TOTALS');
+  sheet.getRange(totalsRow, 1, 1, 2).merge();
+  sheet.getRange(totalsRow, 1).setHorizontalAlignment('right');
+
+  // Write total values
+  for (let iter = 1; iter <= 6; iter++) {
+    sheet.getRange(totalsRow, 2 + iter).setValue(totals[iter]);
+  }
+  sheet.getRange(totalsRow, 9).setValue(totals.totalSlotted);
+  sheet.getRange(totalsRow, 10).setValue(totals.unslotted);
+  sheet.getRange(totalsRow, 11).setValue(totals.ticketsWithoutPoints);
+
+  // Format totals row
+  sheet.getRange(totalsRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setFontSize(8)
+    .setBackground('#e0e0e0')
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+
+  sheet.getRange(totalsRow, 3, 1, 9).setHorizontalAlignment('center');
+
+  setRowHeightWithLimit(sheet, totalsRow, 25, 70);
+
+  // Add borders around the data section
+  sheet.getRange(headerRow, 1, epicData.length + 2, headers.length).setBorder(
+    true, true, true, true, false, false,
+    '#666666', SpreadsheetApp.BorderStyle.SOLID_MEDIUM
+  );
+
+  // Add thick borders around iteration columns
+  sheet.getRange(headerRow, 3, epicData.length + 2, 6).setBorder(
+    true, true, true, true, false, false,
+    '#555555', SpreadsheetApp.BorderStyle.SOLID_THICK
+  );
+
+  return totalsRow + 2;
 }
 
-function analyzeScrumTeamData(piNumber, scrumTeamName, refreshFromJira = false) {
-  const ui = SpreadsheetApp.getUi();
-  const programIncrement = `PI ${piNumber}`;
+function createAllEpicsForPlanning(sheet, startRow, issues, scrumTeam) {
+  console.log(`Creating All Epics for Planning section for ${scrumTeam}`);
 
-  try {
-    showProgress(`Analyzing data for ${scrumTeamName} in ${programIncrement}...`);
+  // Filter epics and stories/bugs - UPDATED
+  const epics = issues.filter(i => i.issueType === 'Epic');
+  const stories = issues.filter(i => i.issueType === 'Story' || i.issueType === 'Bug'); // UPDATED: Include Bug type
 
-    if (refreshFromJira && scrumTeamName !== 'Unassigned') {
-      // Fetch fresh data from JIRA for this team (skip for "Unassigned")
-      const jql = `issuetype = Epic AND cf[10113] = "${programIncrement}" AND cf[10040] = "${scrumTeamName}" AND status != "Closed"`;
-      const epics = searchJiraIssues(jql); // This already filters out CLOSED issues
+  if (epics.length === 0) {
+    console.log('No epics found for All Epics section');
+    return startRow;
+  }
 
-      if (epics.length === 0) {
-        closeProgress();
-        console.log(`No epics found for ${scrumTeamName} in ${programIncrement}.`);
-        return {
-          scrumTeam: scrumTeamName,
-          issues: [],
-          epicCount: 0,
-          storyCount: 0
-        };
-      }
+  // Section title - no merge, fill A, B, C with purple
+  sheet.getRange(startRow, 1).setValue('All Epics for Planning');
+  sheet.getRange(startRow, 1, 1, 14).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+  startRow++; // No space between title and table
 
-      showProgress(`Found ${epics.length} epics for ${scrumTeamName}. Fetching child issues...`);
+  // Updated headers - all columns visible
+  const headers = [
+    'Key', 'Summary', 'Cost of Delay', 'Feature Points', 'Feature Point Conversion Value',
+    'Ticket Count', 'Story Points', 'Sized %', 'Allocation', 'Sprint',
+    'Fix Version', 'Status', 'Iteration Start (PI #)', 'Iteration End (PI #)'
+  ];
 
-      // Get child issues for these epics
-      const epicKeys = epics.map(e => e.key);
-      const childIssuesMap = {};
+  sheet.getRange(startRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(startRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
 
-      epicKeys.forEach(key => {
-        childIssuesMap[key] = [];
-      });
+  // Add note to Sized % column
+  sheet.getRange(startRow, 8).setNote('Percentage of tickets with story points assigned');
 
-      // Fetch children in batches
-      const batchSize = 10;
-      for (let i = 0; i < epicKeys.length; i += batchSize) {
-        const batch = epicKeys.slice(i, i + batchSize);
-        const epicKeyList = batch.join(',');
-        const childJql = `cf[10014] in (${epicKeyList}) AND status != "Closed"`;
+  // Set header row height
+  setRowHeightWithLimit(sheet, startRow, 40, 70);
 
-        const children = searchJiraIssues(childJql); // This already filters out CLOSED issues
-        children.forEach(child => {
-          const epicKey = child.epicLink;
-          if (epicKey && childIssuesMap.hasOwnProperty(epicKey)) {
-            childIssuesMap[epicKey].push(child);
-          }
-        });
-      }
+  // Set column widths - Summary column wider
+  sheet.setColumnWidth(1, 100);  // Key
+  sheet.setColumnWidth(2, 300);  // Summary (wider)
+  for (let col = 3; col <= headers.length; col++) {
+    sheet.setColumnWidth(col, 100);
+  }
 
-      // Process and return the data
-      const allIssues = [];
-      epics.forEach(epic => {
-        const epicChildren = childIssuesMap[epic.key] || [];
-        const loeEstimate = epicChildren.reduce((sum, child) => {
-          // Only include Stories and Bugs in LOE calculation
-          if (child.issueType === 'Story' || child.issueType === 'Bug') {
-            return sum + (parseFloat(child.storyPoints) || 0);
-          }
-          return sum;
-        }, 0);
+  startRow++;
 
-        allIssues.push({
-          ...epic,
-          issueType: 'Epic',
-          parentKey: '',
-          loeEstimate: loeEstimate,
-          analyzedValueStream: epic.valueStream
-        });
+  // Process each epic
+  const epicData = [];
+  epics.forEach(epic => {
+    // Find stories and bugs for this epic - UPDATED
+    const epicStories = stories.filter(s =>
+      s.parentKey === epic.key || s.epicLink === epic.key
+    );
 
-        epicChildren.forEach(child => {
-          allIssues.push({
-            ...child,
-            parentKey: epic.key,
-            loeEstimate: 0,
-            storyPointEstimate: parseFloat(child.storyPointEstimate) || 0,
-            analyzedValueStream: epic.valueStream
-          });
-        });
-      });
+    const storyCount = epicStories.length;
+    const totalStoryPoints = epicStories.reduce((sum, s) => sum + (s.storyPoints || 0), 0);
+    const storiesWithPoints = epicStories.filter(s => s.storyPoints && s.storyPoints > 0).length;
+    const sizedPercent = storyCount > 0 ? Math.round((storiesWithPoints / storyCount) * 100) : 0;
 
-      // Update the PI sheet with fresh data
-      const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-      const piSheet = spreadsheet.getSheetByName(`PI ${piNumber}`);
+    epicData.push({
+      key: epic.key,
+      summary: epic.summary || '',
+      costOfDelay: parseCostOfDelay(epic.costOfDelay),
+      featurePoints: epic.featurePoints || 0,
+      pointsValue: (epic.featurePoints || 0) * 10,
+      storyCount: storyCount,
+      storyPoints: totalStoryPoints,
+      sizedPercent: sizedPercent,
+      allocation: epic.allocation || '',
+      sprint: epic.sprintName || '',
+      fixVersion: epic.fixVersion || '',
+      status: epic.status || '',
+      iterationStart: epic.iterationStart || '',
+      iterationEnd: epic.iterationEnd || '',
+      url: epic.url
+    });
+  });
 
-      if (piSheet) {
-        updatePISheetForTeam(piSheet, scrumTeamName, allIssues);
-      }
+  // Sort by Cost of Delay (descending)
+  epicData.sort((a, b) => b.costOfDelay - a.costOfDelay);
 
-      return {
-        scrumTeam: scrumTeamName,
-        issues: allIssues,
-        epicCount: epics.length,
-        storyCount: allIssues.filter(i => i.issueType !== 'Epic').length
-      };
+  // Write data rows
+  epicData.forEach((epic, index) => {
+    const rowNum = startRow + index;
 
+    // Key (with hyperlink) - JIRA_CONFIG.baseUrl is defined in the main config file
+    const epicKeyFormula = `=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${epic.key}","${epic.key}")`;
+    sheet.getRange(rowNum, 1).setFormula(epicKeyFormula);
+
+    // Summary (column B)
+    sheet.getRange(rowNum, 2).setValue(epic.summary);
+    sheet.getRange(rowNum, 2).setWrap(true);
+
+    // Cost of Delay (column C) - format as number with thousands separator
+    sheet.getRange(rowNum, 3).setValue(epic.costOfDelay);
+    sheet.getRange(rowNum, 3).setNumberFormat('#,##0');
+
+    // Feature Points (column D)
+    sheet.getRange(rowNum, 4).setValue(epic.featurePoints);
+
+    // Feature Point Conversion Value (column E)
+    sheet.getRange(rowNum, 5).setValue(epic.pointsValue);
+
+    // Ticket Count (column F)
+    sheet.getRange(rowNum, 6).setValue(epic.storyCount);
+
+    // Story Points (column G)
+    sheet.getRange(rowNum, 7).setValue(epic.storyPoints);
+
+    // Sized % (column H) - FIXED: Center aligned
+    sheet.getRange(rowNum, 8).setValue(epic.sizedPercent + '%');
+    sheet.getRange(rowNum, 8).setHorizontalAlignment('center');  // Center align
+
+    // Allocation (column I)
+    sheet.getRange(rowNum, 9).setValue(epic.allocation);
+
+    // Sprint (column J)
+    sheet.getRange(rowNum, 10).setValue(epic.sprint);
+
+    // Fix Version (column K)
+    sheet.getRange(rowNum, 11).setValue(epic.fixVersion);
+
+    // Status (column L)
+    sheet.getRange(rowNum, 12).setValue(epic.status);
+
+    // Iteration Start (column M)
+    sheet.getRange(rowNum, 13).setValue(epic.iterationStart);
+
+    // Iteration End (column N)
+    sheet.getRange(rowNum, 14).setValue(epic.iterationEnd);
+
+    // Apply conditional formatting for Sized %
+    if (epic.sizedPercent === 100) {
+      sheet.getRange(rowNum, 8).setBackground('#ccffcc'); // Green
+    } else if (epic.sizedPercent >= 50) {
+      sheet.getRange(rowNum, 8).setBackground('#ffffcc'); // Yellow
     } else {
-      // Read from existing PI sheet (or for "Unassigned")
-      const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-      const piSheet = spreadsheet.getSheetByName(`PI ${piNumber}`);
+      sheet.getRange(rowNum, 8).setBackground('#ffcccc'); // Red
+    }
+  });
 
-      if (!piSheet) {
-        closeProgress();
-        console.log('No PI data found. Please run an analysis first.');
-        return {
-          scrumTeam: scrumTeamName,
-          issues: [],
-          epicCount: 0,
-          storyCount: 0
-        };
-      }
+  // Format data rows
+  if (epicData.length > 0) {
+    sheet.getRange(startRow, 1, epicData.length, headers.length).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+    // FIXED: Columns C-G centered (not including H anymore as it's set individually above)
+    sheet.getRange(startRow, 3, epicData.length, 5).setHorizontalAlignment('center');
 
-      const dataRange = piSheet.getDataRange();
-      const values = dataRange.getValues();
-      const headers = values[3];
+    // Set reasonable row heights for data rows
+    for (let i = 0; i < epicData.length; i++) {
+      setRowHeightWithLimit(sheet, startRow + i, 30, 70);
+    }
+  }
 
-      const issues = parsePISheetData(values, headers);
+  // NO TOTALS ROW as requested - just return the next row after the data
+  startRow += epicData.length;
+  startRow += 2; // Add spacing after section
 
-      // Filter for team AND exclude any CLOSED issues
-      const teamIssues = issues.filter(issue =>
-      issue.scrumTeam === scrumTeamName
+  return startRow;
+}
+
+/**
+ * Creates Release Version Validation section for scrum team summary
+ * @param {Sheet} sheet - The sheet to write to
+ * @param {number} startRow - The row to start writing at
+ * @param {Array} issues - All issues for the team
+ * @param {string} scrumTeam - The scrum team name
+ * @param {string} programIncrement - The PI name (e.g., "PI 12")
+ * @return {number} The next available row after the section
+ */
+function createReleaseVersionValidation(sheet, startRow, issues, scrumTeam, programIncrement) {
+  console.log(`Creating Release Version Validation for ${scrumTeam} - checking for epics with iteration dates and children with sprints`);
+
+  // Extract PI number from programIncrement (e.g., "PI 12" -> 12)
+  const piNumber = parseInt(programIncrement.replace('PI ', ''));
+  if (isNaN(piNumber)) {
+    console.error('Invalid PI number in programIncrement:', programIncrement);
+    return startRow;
+  }
+
+  // Filter epics and child tickets
+  const epics = issues.filter(i => i.issueType === 'Epic');
+  const childTickets = issues.filter(i =>
+    (i.issueType === 'Story' || i.issueType === 'Bug') &&
+    (i.epicLink || i.parentKey)
+  );
+
+  console.log(`Found ${epics.length} epics and ${childTickets.length} child tickets`);
+
+  if (epics.length === 0) {
+    console.log('No epics found for Release Version Validation');
+    // Add a small note indicating no epics
+    sheet.getRange(startRow, 1).setValue('Release Version Validation: No epics found');
+    sheet.getRange(startRow, 1).setFontSize(8).setFontStyle('italic').setFontColor('#999999').setFontFamily('Comfortaa');
+    setRowHeightWithLimit(sheet, startRow, 20, 70);
+    return startRow + 2;
+  }
+
+  // Process each epic
+  const validationData = [];
+  let epicsChecked = 0;
+  let epicsWithoutDates = 0;
+  let epicsWithoutSprints = 0;
+
+  epics.forEach(epic => {
+    epicsChecked++;
+
+    // Skip epics without iteration dates
+    if (!epic.iterationStart || !epic.iterationEnd) {
+      epicsWithoutDates++;
+      console.log(`Skipping epic ${epic.key} - missing iteration dates (Start: ${epic.iterationStart}, End: ${epic.iterationEnd})`);
+      return;
+    }
+
+    // Find all children of this epic
+    const epicChildren = childTickets.filter(child =>
+      child.epicLink === epic.key || child.parentKey === epic.key
+    );
+
+    console.log(`Epic ${epic.key} has ${epicChildren.length} children`);
+
+    // Check if at least one child has a sprint
+    const hasChildWithSprint = epicChildren.some(child => child.sprintName && child.sprintName.trim() !== '');
+
+    if (!hasChildWithSprint) {
+      epicsWithoutSprints++;
+      console.log(`Skipping epic ${epic.key} - no children with sprint assigned`);
+      return;
+    }
+
+    // Determine recommended fix version based on children's sprints
+    const recommendedFixVersion = determineRecommendedFixVersion(epicChildren, piNumber);
+
+    // Check if there's a mismatch
+    const actualFixVersion = epic.fixVersion || '';
+    const hasMismatch = recommendedFixVersion && actualFixVersion !== recommendedFixVersion;
+
+    // Find children with wrong fix version
+    const childrenWithWrongFixVersion = findChildrenWithWrongFixVersion(
+      epicChildren,
+      actualFixVersion || recommendedFixVersion
+    );
+
+    validationData.push({
+      epicKey: epic.key,
+      summary: epic.summary || '',
+      iterationStart: epic.iterationStart || '',
+      iterationEnd: epic.iterationEnd || '',
+      fixVersion: actualFixVersion,
+      recommendedFixVersion: recommendedFixVersion,
+      hasMismatch: hasMismatch,
+      childrenWithWrongFixVersion: childrenWithWrongFixVersion
+    });
+  });
+
+  console.log(`Release Version Validation Summary: ${epicsChecked} epics checked, ${epicsWithoutDates} without dates, ${epicsWithoutSprints} without sprints, ${validationData.length} with potential issues`);
+
+  // If no epics meet the criteria, add a note
+  if (validationData.length === 0) {
+    console.log('No epics with iteration dates and children with sprints found for Release Version Validation');
+
+    // Add a small note indicating no issues found
+    let message = 'Release Version Validation: No issues detected';
+    if (epicsWithoutDates > 0 || epicsWithoutSprints > 0) {
+      message += ` (${epicsWithoutDates} epics without dates, ${epicsWithoutSprints} without sprints)`;
+    }
+    sheet.getRange(startRow, 1).setValue(message);
+    sheet.getRange(startRow, 1).setFontSize(8).setFontStyle('italic').setFontColor('#999999').setFontFamily('Comfortaa');
+    setRowHeightWithLimit(sheet, startRow, 20, 70);
+
+    return startRow + 2;
+  }
+
+  // Section title - no merge, fill A, B, C with purple
+  sheet.getRange(startRow, 1).setValue('Release Version Validation');
+  sheet.getRange(startRow, 1, 1, 3).setBackground('#E1D5E7');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+  startRow++; // No space between title and table
+
+  // Headers
+  const headers = [
+    'Epic Key', 'Summary', 'Iteration Start', 'Iteration End',
+    'Fix Version', 'Epic Recommended Fix Version', 'Children with Potential Wrong Fix Version'
+  ];
+
+  sheet.getRange(startRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(startRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+
+  // Set header row height (max 70)
+  setRowHeightWithLimit(sheet, startRow, 40, 70);
+
+  // Set all column widths to 100
+  for (let col = 1; col <= headers.length; col++) {
+    sheet.setColumnWidth(col, 100);
+  }
+
+  startRow++;
+
+  // Write data rows
+  validationData.forEach((data, index) => {
+    const rowNum = startRow + index;
+
+    // Epic Key (with hyperlink) - JIRA_CONFIG.baseUrl is defined in the main config file
+    const epicKeyFormula = `=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${data.epicKey}","${data.epicKey}")`;
+    sheet.getRange(rowNum, 1).setFormula(epicKeyFormula);
+
+    // Summary
+    sheet.getRange(rowNum, 2).setValue(data.summary);
+    sheet.getRange(rowNum, 2).setWrap(true);
+
+    // Iteration dates
+    sheet.getRange(rowNum, 3).setValue(data.iterationStart);
+    sheet.getRange(rowNum, 4).setValue(data.iterationEnd);
+
+    // Fix Version
+    sheet.getRange(rowNum, 5).setValue(data.fixVersion);
+
+    // Epic Recommended Fix Version
+    sheet.getRange(rowNum, 6).setValue(data.recommendedFixVersion);
+
+    // Highlight if mismatch
+    if (data.hasMismatch) {
+      sheet.getRange(rowNum, 5, 1, 2).setBackground('#ffcccc'); // Light red for both columns
+    }
+
+    // Children with wrong fix version (as hyperlinks) - JIRA_CONFIG.baseUrl is defined in the main config file
+    if (data.childrenWithWrongFixVersion.length > 0) {
+      const childLinks = data.childrenWithWrongFixVersion.map(childKey =>
+        `=HYPERLINK("${JIRA_CONFIG.baseUrl}/browse/${childKey}","${childKey}")`
       );
 
-      return {
-        scrumTeam: scrumTeamName,
-        issues: teamIssues,
-        epicCount: teamIssues.filter(i => i.issueType === 'Epic').length,
-        storyCount: teamIssues.filter(i => i.issueType !== 'Epic').length
-      };
+      // Concatenate formulas with CHAR(10) for line breaks
+      const formula = childLinks.length === 1 ? childLinks[0] :
+        `=CONCATENATE(${childLinks.join(',CHAR(10),')})`;
+
+      sheet.getRange(rowNum, 7).setFormula(formula);
+      sheet.getRange(rowNum, 7).setWrap(true);
     }
 
-  } catch (error) {
-    console.error('Error analyzing scrum team data:', error);
-    throw error;
-  } finally {
-    closeProgress();
+    // Set row height if needed (capped at 70)
+    if (data.childrenWithWrongFixVersion.length > 2) {
+      const desiredHeight = 20 + (data.childrenWithWrongFixVersion.length * 15);
+      setRowHeightWithLimit(sheet, rowNum, desiredHeight, 70);
+    }
+  });
+
+  // Format data rows
+  if (validationData.length > 0) {
+    sheet.getRange(startRow, 1, validationData.length, headers.length).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+    sheet.getRange(startRow, 1, validationData.length, headers.length).setVerticalAlignment('top');
+
+    // Set standard row heights for data rows (unless overridden by children count)
+    for (let i = 0; i < validationData.length; i++) {
+      const data = validationData[i];
+      if (data.childrenWithWrongFixVersion.length <= 2) {
+        setRowHeightWithLimit(sheet, startRow + i, 30, 70);
+      }
+    }
   }
+
+  startRow += validationData.length;
+  startRow += 2; // Add spacing after section
+
+  return startRow;
 }
 
-function generateSummaryForValueStream(piNumber, valueStream) {
+/**
+ * Determines the recommended fix version based on children's sprint iterations
+ * @param {Array} children - Array of child issues (Stories and Bugs)
+ * @param {number} piNumber - The PI number (e.g., 12)
+ * @return {string} The recommended fix version or empty string
+ */
+function determineRecommendedFixVersion(children, piNumber) {
+  if (!children || children.length === 0) return '';
+
+  let maxIteration = 0;
+  let foundValidSprint = false;
+
+  // Analyze each child's sprint name
+  children.forEach(child => {
+    if (child.sprintName) {
+      // Extract iteration from sprint name
+      // Try multiple patterns: "PI 12.3", "12.3", "Team - 12.3", etc.
+      const patterns = [
+        new RegExp(`PI\\s*${piNumber}\\s*\\.\\s*(\\d+)`, 'i'),
+        new RegExp(`${piNumber}\\s*\\.\\s*(\\d+)`, 'i'),
+        new RegExp(`\\b${piNumber}\\.(\\d+)\\b`)
+      ];
+
+      for (const pattern of patterns) {
+        const match = child.sprintName.match(pattern);
+        if (match) {
+          const sprintIteration = parseInt(match[1]);
+          if (sprintIteration > maxIteration) {
+            maxIteration = sprintIteration;
+            foundValidSprint = true;
+          }
+          break; // Found a match, no need to try other patterns
+        }
+      }
+    }
+  });
+
+  if (!foundValidSprint) {
+    console.log(`No valid sprint patterns found for PI ${piNumber} in children`);
+    return '';
+  }
+
+  // Apply business rules for fix version
+  if (maxIteration >= 5) {
+    // If any sprint is in iteration 5 or 6
+    return 'Release 7.13';
+  } else if (maxIteration >= 1 && maxIteration <= 4) {
+    // If all sprints are in iterations 1-4
+    return 'Release 7.12';
+  }
+
+  return '';
+}
+
+/**
+ * Finds children with wrong or missing fix version
+ * @param {Array} children - Array of child issues
+ * @param {string} expectedFixVersion - The expected fix version from the epic
+ * @return {Array} Array of child keys with wrong fix version
+ */
+function findChildrenWithWrongFixVersion(children, expectedFixVersion) {
+  const wrongChildren = [];
+
+  if (!expectedFixVersion) return wrongChildren;
+
+  // Normalize expected fix version for comparison
+  const expectedNorm = expectedFixVersion.trim().toLowerCase();
+
+  children.forEach(child => {
+    const childFixVersion = child.fixVersion || '';
+    const childNorm = childFixVersion.trim().toLowerCase();
+
+    // Check if child has no fix version or different fix version
+    if (!childFixVersion || childNorm !== expectedNorm) {
+      wrongChildren.push(child.key);
+    }
+  });
+
+  return wrongChildren;
+}
+
+/**
+ * Integration point - add this call to your createScrumTeamSummary function
+ * This should be added after the existing sections but before the end of the summary
+ */
+function addAllocationMismatchToSummary(sheet, currentRow, teamIssues, scrumTeam) {
+  console.log(`Checking allocation mismatches for ${scrumTeam}`);
+  currentRow = createEpicAllocationMismatchTable(sheet, currentRow, teamIssues, scrumTeam);
+  return currentRow;
+}
+
+/**
+ * Creates a table showing epics with child tickets that have mismatched allocations
+ * @param {Sheet} sheet - The sheet to write to
+ * @param {number} startRow - The row to start writing at
+ * @param {Array} issues - All issues for the team
+ * @param {string} scrumTeam - The scrum team name
+ * @return {number} The next available row after the table
+ */
+function createEpicAllocationMismatchTable(sheet, startRow, issues, scrumTeam) {
+  console.log(`Creating allocation mismatch table for ${scrumTeam}`);
+
+  // Filter epics and potential child tickets
+  const epics = issues.filter(i => i.issueType === 'Epic');
+  const childTickets = issues.filter(i =>
+    (i.issueType === 'Story' || i.issueType === 'Bug') &&
+    (i.epicLink || i.parentKey)
+  );
+
+  console.log(`Found ${epics.length} epics and ${childTickets.length} child tickets for allocation mismatch check`);
+
+  // Find epics with mismatched children
+  const epicsWithMismatches = [];
+
+  epics.forEach(epic => {
+    // Find all children of this epic
+    const epicChildren = childTickets.filter(child =>
+      child.epicLink === epic.key || child.parentKey === epic.key
+    );
+
+    // Find children with different allocation than the epic
+    const mismatchedChildren = epicChildren.filter(child => {
+      // Skip if either allocation is missing
+      if (!child.allocation || !epic.allocation) {
+        return false;
+      }
+
+      // Normalize allocations for comparison (trim whitespace, compare case-insensitive)
+      const childAllocationNorm = child.allocation.trim().toLowerCase();
+      const epicAllocationNorm = epic.allocation.trim().toLowerCase();
+
+      // Log the allocation comparison for debugging
+      if (epicChildren.indexOf(child) === 0) { // Only log first child
+        console.log(`Comparing allocations - Epic ${epic.key}: "${epic.allocation}" vs Child ${child.key}: "${child.allocation}"`);
+      }
+
+      return childAllocationNorm !== epicAllocationNorm;
+    });
+
+    if (mismatchedChildren.length > 0) {
+      console.log(`Epic ${epic.key} has ${mismatchedChildren.length} mismatched children`);
+      epicsWithMismatches.push({
+        epic: epic,
+        mismatchedChildren: mismatchedChildren
+      });
+    }
+  });
+
+  // If no mismatches found, add a note
+  if (epicsWithMismatches.length === 0) {
+    console.log('No allocation mismatches found');
+
+    // Add a small note indicating no issues found
+    sheet.getRange(startRow, 1).setValue('Epic-Child Allocation Mismatches: No issues detected');
+    sheet.getRange(startRow, 1).setFontSize(8).setFontStyle('italic').setFontColor('#999999').setFontFamily('Comfortaa');
+    setRowHeightWithLimit(sheet, startRow, 20, 70);
+
+    return startRow + 2;
+  }
+
+  // Create section title - merge A, B, C
+  sheet.getRange(startRow, 1, 1, 3).merge();
+  sheet.getRange(startRow, 1).setValue('Epic-Child Allocation Mismatches');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+  startRow++; // No space between title and table
+
+  // Create headers
+  const headers = ['Epic Key', 'Epic Summary', 'Epic Allocation', 'Mismatched Children'];
+  sheet.getRange(startRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(startRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+
+  // Set header row height
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+
+  // Set all column widths to 100
+  for (let col = 1; col <= headers.length; col++) {
+    sheet.setColumnWidth(col, 100);
+  }
+
+  startRow++;
+
+  // Process each epic with mismatches
+  epicsWithMismatches.forEach(item => {
+    const epic = item.epic;
+    const children = item.mismatchedChildren;
+
+    // Determine how many columns we need for children
+    const maxChildrenPerRow = 10; // Limit to prevent excessive horizontal spread
+    const numRows = Math.ceil(children.length / maxChildrenPerRow);
+
+    for (let rowIndex = 0; rowIndex < numRows; rowIndex++) {
+      const rowStartIndex = rowIndex * maxChildrenPerRow;
+      const rowEndIndex = Math.min(rowStartIndex + maxChildrenPerRow, children.length);
+      const childrenForRow = children.slice(rowStartIndex, rowEndIndex);
+
+      // Write epic info (only on first row for each epic)
+      if (rowIndex === 0) {
+        // Epic Key with hyperlink
+        if (epic.url) {
+          const richText = SpreadsheetApp.newRichTextValue()
+            .setText(epic.key)
+            .setLinkUrl(epic.url)
+            .build();
+          sheet.getRange(startRow, 1).setRichTextValue(richText);
+        } else {
+          sheet.getRange(startRow, 1).setValue(epic.key);
+        }
+
+        // Epic Summary
+        sheet.getRange(startRow, 2).setValue(epic.summary || '');
+        sheet.getRange(startRow, 2).setWrap(true);
+
+        // Epic Allocation
+        sheet.getRange(startRow, 3).setValue(epic.allocation || 'None');
+      }
+
+      // Write child tickets info starting from column 4
+      let childColumn = 4;
+      childrenForRow.forEach(child => {
+        // Create child info text with allocation
+        const childText = `${child.key}\n(${child.allocation || 'None'})`;
+
+        // Set as hyperlink if URL exists
+        if (child.url) {
+          const richText = SpreadsheetApp.newRichTextValue()
+            .setText(childText)
+            .setLinkUrl(child.url)
+            .build();
+          sheet.getRange(startRow, childColumn).setRichTextValue(richText);
+        } else {
+          sheet.getRange(startRow, childColumn).setValue(childText);
+        }
+
+        // Style the cell
+        sheet.getRange(startRow, childColumn)
+          .setWrap(true)
+          .setFontSize(8)
+          .setVerticalAlignment('top')
+          .setBackground('#ffe6e6') // Light red background for mismatches
+          .setFontFamily('Comfortaa');
+
+        childColumn++;
+      });
+
+      // Style the row
+      sheet.getRange(startRow, 1, 1, 3).setFontSize(8).setVerticalAlignment('top').setWrap(true).setFontFamily('Comfortaa');
+
+      // Set row height to accommodate wrapped text (max 70)
+      setRowHeightWithLimit(sheet, startRow, 60, 70);
+
+      startRow++;
+    }
+
+    // Add a small gap between epics
+    if (epicsWithMismatches.indexOf(item) < epicsWithMismatches.length - 1) {
+      sheet.setRowHeight(startRow, 5);
+      startRow++;
+    }
+  });
+
+  // Add spacing after the table
+  startRow += 2;
+
+  return startRow;
+}
+
+// ===== UI ENTRY POINTS =====
+/**
+ * Generate summaries for all scrum teams in a PI
+ */
+function generateAllScrumTeamSummaries(piNumber) {
   const ui = SpreadsheetApp.getUi();
   const programIncrement = `PI ${piNumber}`;
 
   try {
-    showProgress(`Generating summary for ${programIncrement} - ${valueStream} (all projects)...`);
+    showProgress(`Generating summaries for all teams in ${programIncrement}...`);
 
     // Check if PI data sheet exists
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -4724,648 +3373,94 @@ function generateSummaryForValueStream(piNumber, valueStream) {
     showProgress('Reading PI data...');
     const dataRange = piSheet.getDataRange();
     const values = dataRange.getValues();
+    const headers = values[3];
 
-    // Find header row (should be row 4, index 3)
-    const headerRow = 3;
-    if (values.length <= headerRow) {
+    const allIssues = parsePISheetData(values, headers);
+
+    // Get unique scrum teams
+    const scrumTeams = [...new Set(allIssues.map(issue => issue.scrumTeam || 'Unassigned'))].sort();
+
+    if (scrumTeams.length === 0) {
       closeProgress();
-      ui.alert('Invalid data format in PI sheet.');
+      ui.alert('No scrum teams found in the data.');
       return;
     }
 
-    const headers = values[headerRow];
-    const allIssues = [];
-
-    // Parse issues from the sheet
-    for (let i = headerRow + 1; i < values.length; i++) {
-      const row = values[i];
-      if (!row[0]) continue;
-
-      const issue = parsePISheetRow(row, headers);
-      allIssues.push(issue);
-    }
-
-    // Filter issues for the selected value stream
-    const vsIssues = allIssues.filter(issue => issue.analyzedValueStream === valueStream);
-
-    if (vsIssues.length === 0) {
-      closeProgress();
-      ui.alert(`No data found for ${valueStream} in ${programIncrement}.`);
-      return;
-    }
-
-    // Generate summary for just this value stream
-    showProgress('Creating summary report...');
-    createValueStreamSummaries(vsIssues, programIncrement, [valueStream]);
+    // Generate summaries for all teams
+    showProgress(`Creating summaries for ${scrumTeams.length} teams...`);
+    createScrumTeamSummaries(allIssues, programIncrement, scrumTeams);
 
     closeProgress();
 
     ui.alert(
       'Success',
-      `Summary report generated for ${programIncrement} - ${valueStream}\n\n` +
-      `Data includes epics from ALL projects in JIRA\n` +
-      `Sheet: "${programIncrement} Summary - ${valueStream}"`,
+      `Summary reports generated for ${scrumTeams.length} teams in ${programIncrement}:\n\n` +
+      scrumTeams.join('\n'),
       ui.ButtonSet.OK
     );
 
   } catch (error) {
-    console.error('Error generating summary:', error);
+    console.error('Error generating summaries:', error);
     closeProgress();
     ui.alert('Error', 'An error occurred: ' + error.toString(), ui.ButtonSet.OK);
   }
 }
 
-function updateAllRelevantSummaries(piNumber, updatedValueStreams = [], updatedScrumTeams = []) {
-  const ui = SpreadsheetApp.getUi();
+/**
+ * Batch update function for multiple teams
+ * This function can be called to update multiple team summaries at once
+ * @param {string} piNumber - The PI number
+ * @param {Array} teamsToUpdate - Array of team names to update
+ * @return {Object} Results object with success/failure counts
+ */
+function batchUpdateScrumTeamSummaries(piNumber, teamsToUpdate) {
   const programIncrement = `PI ${piNumber}`;
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const piSheet = spreadsheet.getSheetByName(`PI ${piNumber}`);
 
-  try {
-    showProgress('Updating all relevant summaries...');
-
-    // Get the PI sheet
-    const piSheet = spreadsheet.getSheetByName(`PI ${piNumber}`);
-    if (!piSheet) {
-      console.log('No PI sheet found');
-      return;
-    }
-
-    // Read all data from the PI sheet
-    const dataRange = piSheet.getDataRange();
-    const values = dataRange.getValues();
-    const headers = values[3];
-    const allIssues = parsePISheetData(values, headers);
-
-    // Get all unique value streams and scrum teams from the data
-    const allValueStreams = [...new Set(allIssues.map(i => i.analyzedValueStream || i.valueStream).filter(vs => vs))];
-    const allScrumTeams = [...new Set(allIssues.map(i => i.scrumTeam || 'Unassigned'))];
-
-    console.log(`Found ${allValueStreams.length} value streams and ${allScrumTeams.length} scrum teams to potentially update`);
-
-    let updatedCount = 0;
-
-    // Update value stream summaries
-    showProgress('Updating value stream summaries...');
-    allValueStreams.forEach(valueStream => {
-      // Check if summary sheet exists
-      const summarySheetName = `${programIncrement} Summary - ${valueStream}`;
-      const summarySheet = spreadsheet.getSheetByName(summarySheetName);
-
-      if (summarySheet) {
-        console.log(`Updating value stream summary: ${valueStream}`);
-        createValueStreamSummaryEnhanced(allIssues, programIncrement, valueStream);
-        updatedCount++;
-      }
-    });
-
-    // Update scrum team summaries
-    showProgress('Updating scrum team summaries...');
-    allScrumTeams.forEach(scrumTeam => {
-      // Check if summary sheet exists
-      const summarySheetName = `${programIncrement} - ${scrumTeam} Summary`;
-      const summarySheet = spreadsheet.getSheetByName(summarySheetName);
-
-      if (summarySheet) {
-        console.log(`Updating scrum team summary: ${scrumTeam}`);
-        createScrumTeamSummary(allIssues, programIncrement, scrumTeam);
-        updatedCount++;
-      }
-    });
-
-    closeProgress();
-
-    console.log(`Updated ${updatedCount} summary sheets`);
-
-  } catch (error) {
-    console.error('Error updating summaries:', error);
-    closeProgress();
-    throw error;
+  if (!piSheet) {
+    throw new Error(`No data found for ${programIncrement}. Please run the full analysis first.`);
   }
-}
 
-// ===== 11. UTILITY/HELPER FUNCTIONS =====
-function mapFieldToHeader(fieldName) {
-  const fieldToHeaderMap = {
-    'key': 'Key',
-    'parentKey': 'Parent Key',
-    'epicLink': 'Epic Link',
-    'issueType': 'Issue Type',
-    'summary': 'Summary',
-    'status': 'Status',
-    'valueStream': 'Value Stream',
-    'analyzedValueStream': 'Analyzed Value Stream',
-    'org': 'Org',
-    'piCommitment': 'PI Commitment',
-    'programIncrement': 'Program Increment',
-    'scrumTeam': 'Scrum Team',
-    'piTargetIteration': 'PI Target Iteration',
-    'iterationStart': 'Iteration Start',
-    'iterationEnd': 'Iteration End',
-    'allocation': 'Allocation',
-    'portfolioInitiative': 'Portfolio Initiative',
-    'programInitiative': 'Program Initiative',
-    'rag': 'RAG',
-    'ragNote': 'RAG Note',
-    'storyPoints': 'Story Points',
-    'storyPointEstimate': 'Story Point Estimate',
-    'featurePoints': 'Feature Points',
-    'loeEstimate': 'LOE Estimate',
-    'dependsOnValuestream': 'Depends on Valuestream',
-    'dependsOnTeam': 'Depends on Team',
-    'costOfDelay': 'Cost of Delay'
+  // Read all data from the PI sheet
+  const dataRange = piSheet.getDataRange();
+  const values = dataRange.getValues();
+  const headers = values[3];
+  const allIssues = parsePISheetData(values, headers);
+
+  const results = {
+    success: [],
+    failed: [],
+    noData: [],
+    total: teamsToUpdate.length
   };
 
-  return fieldToHeaderMap[fieldName] || fieldName;
-}
-
-function checkForDuplicatesInSheet() {
-  const ui = SpreadsheetApp.getUi();
-  const sheet = SpreadsheetApp.getActiveSheet();
-
-  if (!sheet.getName().startsWith('PI ')) {
-    ui.alert('Please run this on a PI sheet (e.g., "PI 11")');
-    return;
-  }
-
-  const dataRange = sheet.getDataRange();
-  const values = dataRange.getValues();
-
-  // Assuming header is at row 4 (index 3)
-  const headerRow = 3;
-  const keyColumn = 0; // Column A
-
-  const keyCount = {};
-  const duplicates = [];
-
-  // Count occurrences of each key
-  for (let i = headerRow + 1; i < values.length; i++) {
-    const key = values[i][keyColumn];
-    if (key && key !== '') {
-      if (!keyCount[key]) {
-        keyCount[key] = {
-          count: 0,
-          rows: []
-        };
-      }
-      keyCount[key].count++;
-      keyCount[key].rows.push(i + 1); // 1-based row number
-    }
-  }
-
-  // Find duplicates
-  Object.keys(keyCount).forEach(key => {
-    if (keyCount[key].count > 1) {
-      duplicates.push({
-        key: key,
-        count: keyCount[key].count,
-        rows: keyCount[key].rows
-      });
-    }
-  });
-
-  // Report results
-  if (duplicates.length === 0) {
-    ui.alert('✅ No Duplicates Found', 'All keys in column A are unique.', ui.ButtonSet.OK);
-  } else {
-    let message = `Found ${duplicates.length} keys with duplicates:\n\n`;
-    duplicates.slice(0, 10).forEach(dup => {
-      message += `${dup.key}: ${dup.count} occurrences (rows: ${dup.rows.join(', ')})\n`;
-    });
-    if (duplicates.length > 10) {
-      message += `\n... and ${duplicates.length - 10} more`;
-    }
-
-    ui.alert('[!] Duplicates Found', message, ui.ButtonSet.OK);
-  }
-}
-
-function checkEpicCounts(piNumber) {
-  const programIncrement = `PI ${piNumber}`;
-  const valueStreams = ["EMA Clinical", "EMA RAC", "MMPM"];
-
-  valueStreams.forEach(vs => {
-    const jql = buildEpicJQL(vs, programIncrement);
-    console.log(`\nChecking ${vs}...`);
-    console.log(`JQL: ${jql}`);
-
-    // CORRECT: Use v3 endpoint
-    const url = `${JIRA_CONFIG.baseUrl}/rest/api/3/search/jql`;
-
-    // CORRECT: Send as POST payload
-    const payload = {
-      jql: jql,
-      startAt: 0,
-      maxResults: 0,
-      fields: ['key']
-    };
-
+  // Process each team
+  teamsToUpdate.forEach(team => {
     try {
-      // CORRECT: Use POST method
-      const response = makeJiraRequest(url, 'POST', payload);
-      console.log(`${vs}: ${response.total} total epics across all projects`);
-      if (response.total > 100) {
-        console.log(`[!] ${vs} has more than 100 epics! Code will fetch all with pagination.`);
-      }
-    } catch (error) {
-      console.error(`Error checking ${vs}:`, error);
-    }
-  });
-}
+      showProgress(`Updating summary for ${team}...`);
 
-function verifyAndLogFieldMappings() {
-  const ui = SpreadsheetApp.getUi();
+      const result = createScrumTeamSummary(allIssues, programIncrement, team);
 
-  try {
-    showProgress('Verifying JIRA field mappings...');
-
-    const testJql = 'issuetype = Epic AND status != "Closed" ORDER BY created DESC';
-
-    // CORRECT: Use v3 endpoint
-    const url = `${JIRA_CONFIG.baseUrl}/rest/api/3/search/jql`;
-
-    // CORRECT: Send as POST payload, NOT URL query params
-    const payload = {
-      jql: testJql,
-      maxResults: 1,
-      expand: ['names', 'schema']
-    };
-
-    // CORRECT: Use POST method
-    const response = makeJiraRequest(url, 'POST', payload);
-
-    if (response && response.issues && response.issues.length > 0) {
-      const issue = response.issues[0];
-      const fields = issue.fields;
-
-      console.log('\n=== FIELD MAPPING VERIFICATION ===');
-      console.log('Test Issue:', issue.key);
-      console.log('\nField Mappings vs Actual Values:');
-
-      Object.entries(FIELD_MAPPINGS).forEach(([name, fieldId]) => {
-        const rawValue = fields[fieldId];
-        const parsedIssue = parseJiraIssue(issue);
-
-        console.log(`\n${name} (${fieldId}):`);
-        console.log('  Raw value:', JSON.stringify(rawValue, null, 2));
-        console.log('  Parsed value:', parsedIssue[name]);
-        console.log('  Type:', typeof rawValue);
-      });
-
-      if (response.names) {
-        console.log('\n=== AVAILABLE CUSTOM FIELDS ===');
-        Object.entries(response.names)
-          .filter(([id]) => id.startsWith('customfield_'))
-          .forEach(([id, name]) => {
-            console.log(`${id}: ${name}`);
-          });
-      }
-    }
-
-    closeProgress();
-
-    ui.alert(
-      'Field Verification Complete',
-      'Check the Execution Log (View > Logs) for detailed field mapping information.',
-      ui.ButtonSet.OK
-    );
-
-  } catch (error) {
-    closeProgress();
-    console.error('Error verifying fields:', error);
-    ui.alert('Error verifying fields: ' + error.toString());
-  }
-}
-
-// ===== 12. FORMULA REFRESH FUNCTIONS =====
-function forceRecalculateAllFormulas() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = spreadsheet.getSheets();
-
-  showProgress('Refreshing formulas across all sheets...');
-
-  sheets.forEach(sheet => {
-    try {
-      const sheetName = sheet.getName();
-
-      // Skip the sheets we just wrote data to
-      if (sheetName.startsWith('PI ') && !sheetName.includes('Summary')) {
-        console.log(`Skipping data sheet: ${sheetName}`);
-        return;
-      }
-
-      console.log(`Checking formulas in sheet: ${sheetName}`);
-
-      // Get all data range
-      const range = sheet.getDataRange();
-      const formulas = range.getFormulas();
-
-      // Check if sheet has any formulas
-      let hasFormulas = false;
-      for (let i = 0; i < formulas.length; i++) {
-        for (let j = 0; j < formulas[i].length; j++) {
-          if (formulas[i][j]) {
-            hasFormulas = true;
-            break;
-          }
-        }
-        if (hasFormulas) break;
-      }
-
-      if (hasFormulas) {
-        console.log(`Refreshing formulas in ${sheetName}`);
-        refreshSheetFormulas(sheet);
-      }
-
-    } catch (error) {
-      console.error(`Error refreshing sheet ${sheet.getName()}:`, error);
-    }
-  });
-
-  // Force a full spreadsheet recalculation
-  SpreadsheetApp.flush();
-}
-
-function forceRecalculateSummaryFormulas(spreadsheet, programIncrement) {
-  const sheets = spreadsheet.getSheets();
-
-  sheets.forEach(sheet => {
-    const sheetName = sheet.getName();
-
-    // Only process summary sheets for this PI
-    if (sheetName.includes(programIncrement) && sheetName.includes('Summary')) {
-      console.log(`Refreshing formulas in: ${sheetName}`);
-
-      try {
-        // Force recalculation by getting all formulas and re-setting them
-        const dataRange = sheet.getDataRange();
-        const formulas = dataRange.getFormulas();
-
-        // Find cells with formulas and refresh them
-        for (let row = 0; row < formulas.length; row++) {
-          for (let col = 0; col < formulas[row].length; col++) {
-            if (formulas[row][col]) {
-              const cell = sheet.getRange(row + 1, col + 1);
-              const formula = formulas[row][col];
-
-              // Re-set the formula to force recalculation
-              cell.setFormula(formula);
-            }
-          }
-        }
-
-        SpreadsheetApp.flush(); // Force all pending changes
-      } catch (error) {
-        console.error(`Error refreshing formulas in ${sheetName}:`, error);
-      }
-    }
-  });
-}
-
-function refreshSheetFormulas(sheet) {
-  const range = sheet.getDataRange();
-  const formulas = range.getFormulas();
-  const values = range.getValues();
-
-  // Find all cells with formulas
-  const formulaCells = [];
-  for (let row = 0; row < formulas.length; row++) {
-    for (let col = 0; col < formulas[row].length; col++) {
-      if (formulas[row][col]) {
-        formulaCells.push({
-          row: row + 1,
-          col: col + 1,
-          formula: formulas[row][col]
+      if (result.success) {
+        results.success.push(team);
+      } else if (result.error && result.error.includes('No data found')) {
+        results.noData.push({
+          team: team,
+          error: result.error
+        });
+      } else {
+        results.failed.push({
+          team: team,
+          error: result.error || 'Unknown error'
         });
       }
-    }
-  }
-
-  if (formulaCells.length === 0) return;
-
-  // Method 1: Add and remove a space to force recalculation
-  formulaCells.forEach(cell => {
-    const cellRange = sheet.getRange(cell.row, cell.col);
-    cellRange.setFormula(cell.formula + ' ');
-    cellRange.setFormula(cell.formula);
-  });
-}
-
-// ===== 13. DEBUG FUNCTIONS =====
-function debugFieldParsingStandalone() {
-  console.log('Starting field parsing debug...');
-
-  try {
-    // Get a sample epic to test parsing
-    const jql = 'issuetype = Epic AND status != "Closed" ORDER BY created DESC';
-    const url = `${JIRA_CONFIG.baseUrl}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=1`;
-
-    const options = {
-      method: 'GET',
-      headers: {
-        'Authorization': 'Basic ' + Utilities.base64Encode(JIRA_CONFIG.email + ':' + JIRA_CONFIG.apiToken),
-        'Accept': 'application/json'
-      },
-      muteHttpExceptions: true
-    };
-
-    console.log('Fetching sample issue from JIRA...');
-    const response = UrlFetchApp.fetch(url, options);
-    const responseCode = response.getResponseCode();
-
-    if (responseCode !== 200) {
-      console.error('JIRA API Error:', response.getContentText());
-      return;
-    }
-
-    const data = JSON.parse(response.getContentText());
-
-    if (data.issues && data.issues.length > 0) {
-      const issue = data.issues[0];
-      console.log('=' .repeat(50));
-      console.log('Testing field parsing on issue:', issue.key);
-      console.log('=' .repeat(50));
-
-      // Test each field mapping
-      Object.entries(FIELD_MAPPINGS).forEach(([fieldName, fieldId]) => {
-        const rawValue = issue.fields[fieldId];
-
-        console.log(`\n${fieldName} (${fieldId}):`);
-        console.log('  Raw value:', JSON.stringify(rawValue, null, 2));
-
-        // Test parsing based on field type
-        if (fieldName.includes('story') || fieldName.includes('feature') ||
-            fieldName.includes('Points') || fieldName.includes('costOfDelay')) {
-          const parsed = getNumericValue(rawValue);
-          console.log('  Parsed (numeric):', parsed);
-          console.log('  Type:', typeof parsed);
-        } else {
-          const parsed = getFieldValue(rawValue);
-          console.log('  Parsed (string):', parsed);
-          console.log('  Type:', typeof parsed);
-        }
-      });
-
-      console.log('\n' + '=' .repeat(50));
-      console.log('Testing full parseJiraIssue function');
-      console.log('=' .repeat(50));
-
-      // Test the full parseJiraIssue function
-      const parsed = parseJiraIssue(issue);
-      console.log('Full parsed issue:', JSON.stringify(parsed, null, 2));
-
-      // Check for common parsing problems
-      console.log('\n' + '=' .repeat(50));
-      console.log('Checking for parsing issues');
-      console.log('=' .repeat(50));
-
-      const problemFields = [];
-      Object.entries(parsed).forEach(([key, value]) => {
-        if (typeof value === 'string' &&
-            (value.includes('value=') || value.includes('{') || value === '[object Object]')) {
-          problemFields.push(`${key}: "${value}"`);
-        }
-      });
-
-      if (problemFields.length > 0) {
-        console.log('[!]  Found fields with parsing issues:');
-        problemFields.forEach(field => console.log('  - ' + field));
-      } else {
-        console.log('✅ All fields parsed correctly!');
-      }
-
-    } else {
-      console.log('No issues found in JIRA');
-    }
-
-  } catch (error) {
-    console.error('Debug error:', error);
-    console.error('Stack trace:', error.stack);
-  }
-}
-
-function cleanupSheetData() {
-  const ui = SpreadsheetApp.getUi();
-  const sheet = SpreadsheetApp.getActiveSheet();
-
-  // Confirm with user
-  const response = ui.alert(
-    'Clean Up Sheet Data',
-    `This will clean up stringified JIRA objects in sheet: ${sheet.getName()}\n\n` +
-    'This will convert values like:\n' +
-    '{id=10616, value=Data and Analytics} → Data and Analytics\n\n' +
-    'Continue?',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (response !== ui.Button.YES) return;
-
-  try {
-    showProgress('Cleaning up sheet data...');
-
-    const dataRange = sheet.getDataRange();
-    const values = dataRange.getValues();
-    let cleanedCount = 0;
-
-    // Process each cell
-    for (let row = 0; row < values.length; row++) {
-      for (let col = 0; col < values[row].length; col++) {
-        const cellValue = values[row][col];
-
-        if (typeof cellValue === 'string' && cellValue.includes('{') && cellValue.includes('value=')) {
-          // Parse the stringified object
-          const cleaned = parseSheetCellValue(cellValue);
-
-          if (cleaned !== cellValue) {
-            values[row][col] = cleaned;
-            cleanedCount++;
-          }
-        }
-      }
-    }
-
-    if (cleanedCount > 0) {
-      // Write back the cleaned values
-      showProgress(`Writing ${cleanedCount} cleaned values...`);
-      dataRange.setValues(values);
-
-      closeProgress();
-      ui.alert('Success', `Cleaned ${cleanedCount} cells containing stringified JIRA objects.`, ui.ButtonSet.OK);
-    } else {
-      closeProgress();
-      ui.alert('No Changes', 'No stringified JIRA objects found in this sheet.', ui.ButtonSet.OK);
-    }
-
-  } catch (error) {
-    closeProgress();
-    ui.alert('Error', 'Error cleaning sheet: ' + error.toString(), ui.ButtonSet.OK);
-  }
-}
-function cleanAllPISheets() {
-  const ui = SpreadsheetApp.getUi();
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = spreadsheet.getSheets();
-
-  let totalCleaned = 0;
-
-  sheets.forEach(sheet => {
-    const sheetName = sheet.getName();
-    if (sheetName.startsWith('PI ')) {
-      console.log(`Cleaning sheet: ${sheetName}`);
-      const cleaned = postProcessSheetData(sheet);
-      totalCleaned += cleaned;
-    }
-  });
-
-  ui.alert(`Cleanup Complete`, `Cleaned ${totalCleaned} cells across all PI sheets.`, ui.ButtonSet.OK);
-}
-function fetchDependenciesForValueStream(valueStream, programIncrement) {
-  console.log(`Fetching dependencies for ${valueStream}...`);
-
-  try {
-    const jql = `issuetype IN (dependency) AND Filter in ("Next PI") AND statusCategory NOT IN (done) AND cf[10114] = "${valueStream}"`;
-    console.log(`Dependency JQL for ${valueStream}: ${jql}`);
-
-    const dependencies = searchJiraIssues(jql, 500);
-    const validDependencies = Array.isArray(dependencies) ? dependencies : [];
-
-    console.log(`[OK] Found ${validDependencies.length} dependencies for ${valueStream}`);
-    return validDependencies;
-
-  } catch (error) {
-    console.error(`[X] Error fetching dependencies for ${valueStream}:`, error);
-    return [];
-  }
-}
-
-/**
- * Fetch dependencies for all value streams
- */
-function fetchDependenciesForAllValueStreams(valueStreams, programIncrement) {
-  const results = [];
-
-  if (!valueStreams || !Array.isArray(valueStreams)) {
-    console.error('Invalid valueStreams parameter:', valueStreams);
-    return results;
-  }
-
-  valueStreams.forEach(valueStream => {
-    try {
-      const dependencies = fetchDependenciesForValueStream(valueStream, programIncrement);
-
-      results.push({
-        valueStream: valueStream,
-        dependencies: dependencies,
-        error: null
-      });
-
-      console.log(`[OK] Processed ${dependencies.length} dependencies for ${valueStream}`);
 
     } catch (error) {
-      console.error(`[X] Error processing dependencies for ${valueStream}:`, error);
-      results.push({
-        valueStream: valueStream,
-        dependencies: [],
-        error: error.message
+      console.error(`Failed to update ${team}:`, error);
+      results.failed.push({
+        team: team,
+        error: error.toString()
       });
     }
   });
@@ -5374,56 +3469,271 @@ function fetchDependenciesForAllValueStreams(valueStreams, programIncrement) {
 }
 
 /**
- * Process dependency data from JIRA response
+ * Creates a menu in the Google Sheets UI for easy access to debug functions
  */
-function processDependencyData(dependency, analyzedValueStream) {
-  if (!dependency) {
-    console.error('processDependencyData: dependency is null or undefined');
-    return null;
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('Scrum Summary Tools')
+    .addItem('Debug Team Data...', 'showDebugDialog')
+    .addToUi();
+}
+
+/**
+ * Shows a dialog to input debug parameters
+ */
+function showDebugDialog() {
+  const html = HtmlService.createHtmlOutputFromString(`
+    <div style="padding: 10px;">
+      <label for="piNumber">PI Number:</label><br>
+      <input type="number" id="piNumber" value="12" style="margin: 5px 0;"><br>
+      <label for="teamName">Team Name:</label><br>
+      <input type="text" id="teamName" value="ATLAS" style="margin: 5px 0;"><br>
+      <button onclick="runDebug()">Run Debug</button>
+    </div>
+    <script>
+      function runDebug() {
+        const piNumber = document.getElementById('piNumber').value;
+        const teamName = document.getElementById('teamName').value;
+        google.script.run.debugScrumTeamData(piNumber, teamName);
+        google.script.host.close();
+      }
+    </script>
+  `)
+  .setWidth(300)
+  .setHeight(200);
+
+  SpreadsheetApp.getUi().showModalDialog(html, 'Debug Team Data');
+}
+
+/**
+ * Debug function to check parsed data for a specific team
+ * @param {string} piNumber - The PI number
+ * @param {string} scrumTeamName - The scrum team name
+ */
+function debugScrumTeamData(piNumber, scrumTeamName) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const piSheet = spreadsheet.getSheetByName(`PI ${piNumber}`);
+
+  if (!piSheet) {
+    console.log(`No sheet found for PI ${piNumber}`);
+    return;
   }
 
-  try {
-    return {
-      key: dependency.key || '',
-      issueType: 'Dependency',
-      summary: dependency.summary || 'No summary',
-      status: dependency.status || '',
-      valueStream: dependency.valueStream || '',
-      scrumTeam: dependency.scrumTeam || '',
-      allocation: dependency.allocation || '',
-      storyPoints: 0,
-      storyPointEstimate: 0,
-      epicLink: dependency.epicLink || '',
-      parentKey: dependency.parentKey || '',
-      featurePoints: 0,
-      loeEstimate: 0,
-      programIncrement: dependency.programIncrement || '',
-      piCommitment: dependency.piCommitment || '',
-      components: dependency.components || '',
-      costOfDelay: 0,
-      momentum: '',
-      dependsOnValuestream: dependency.dependsOnValuestream || '',
-      dependsOnTeam: dependency.dependsOnTeam || '',
-      analyzedValueStream: analyzedValueStream
-    };
-  } catch (error) {
-    console.error(`Error processing dependency ${dependency.key || 'unknown'}:`, error);
-    return null;
+  const dataRange = piSheet.getDataRange();
+  const values = dataRange.getValues();
+  const headers = values[3];
+
+  console.log('Headers found:', headers);
+
+  const allIssues = parsePISheetData(values, headers);
+  const teamIssues = allIssues.filter(issue =>
+    (issue.scrumTeam || 'Unassigned') === scrumTeamName
+  );
+
+  console.log(`Found ${teamIssues.length} issues for team ${scrumTeamName}`);
+
+  // Check for epics with iteration dates
+  const epics = teamIssues.filter(i => i.issueType === 'Epic');
+  console.log(`Found ${epics.length} epics`);
+
+  const epicsWithDates = epics.filter(e => e.iterationStart && e.iterationEnd);
+  console.log(`Found ${epicsWithDates.length} epics with iteration dates`);
+
+  if (epicsWithDates.length > 0) {
+    console.log('Sample epic with dates:', {
+      key: epicsWithDates[0].key,
+      iterationStart: epicsWithDates[0].iterationStart,
+      iterationEnd: epicsWithDates[0].iterationEnd,
+      fixVersion: epicsWithDates[0].fixVersion
+    });
+  }
+
+  // Check for allocation mismatches
+  const epicKeys = epics.map(e => e.key);
+  const childTickets = teamIssues.filter(i =>
+    (i.issueType === 'Story' || i.issueType === 'Bug') &&
+    (epicKeys.includes(i.epicLink) || epicKeys.includes(i.parentKey))
+  );
+
+  console.log(`Found ${childTickets.length} child tickets of epics`);
+
+  // Check allocations
+  const sampleEpic = epics[0];
+  if (sampleEpic) {
+    console.log(`Sample epic allocation: ${sampleEpic.key} = "${sampleEpic.allocation}"`);
+    const epicChildren = childTickets.filter(c =>
+      c.epicLink === sampleEpic.key || c.parentKey === sampleEpic.key
+    );
+    if (epicChildren.length > 0) {
+      console.log(`Sample child allocation: ${epicChildren[0].key} = "${epicChildren[0].allocation}"`);
+    }
   }
 }
-// ===== 14. SETUP FUNCTION ====
 
-function setup() {
-  const ui = SpreadsheetApp.getUi();
-  ui.alert('Setup Instructions:\n\n' +
-    '1. Update JIRA_CONFIG with your JIRA URL, email, and API token\n' +
-    '2. Update VALUE_STREAM_CONFIG in MenuIntegration.gs\n' +
-    '3. Use the menu to analyze PI data\n\n' +
-    'Available Value Streams:\n' +
-    '- EMA Clinical\n' +
-    '- EMA RAC\n' +
-    '- MMPM\n' +
-    '- AIMM\n\n' +
-    'IMPORTANT: Analysis searches across ALL projects in JIRA\n' +
-    'Data will be written to PI-specific sheets with LOE Estimate field');
+/**
+ * Creates a more detailed allocation mismatch report with better formatting
+ * Alternative implementation with a different layout
+ */
+function createDetailedAllocationMismatchReport(sheet, startRow, issues, scrumTeam) {
+  console.log(`Creating detailed allocation mismatch report for ${scrumTeam}`);
+
+  const epics = issues.filter(i => i.issueType === 'Epic');
+  const childTickets = issues.filter(i =>
+    (i.issueType === 'Story' || i.issueType === 'Bug') &&
+    (i.epicLink || i.parentKey)
+  );
+
+  // Collect all mismatches
+  const allMismatches = [];
+
+  epics.forEach(epic => {
+    const epicChildren = childTickets.filter(child =>
+      child.epicLink === epic.key || child.parentKey === epic.key
+    );
+
+    epicChildren.forEach(child => {
+      if (child.allocation && epic.allocation && child.allocation !== epic.allocation) {
+        allMismatches.push({
+          epicKey: epic.key,
+          epicSummary: epic.summary || '',
+          epicAllocation: epic.allocation,
+          epicUrl: epic.url,
+          childKey: child.key,
+          childSummary: child.summary || '',
+          childAllocation: child.allocation,
+          childType: child.issueType,
+          childUrl: child.url,
+          childStoryPoints: child.storyPoints || 0
+        });
+      }
+    });
+  });
+
+  if (allMismatches.length === 0) {
+    console.log('No allocation mismatches found');
+    return startRow;
+  }
+
+  // Section title - merge A, B, C
+  sheet.getRange(startRow, 1, 1, 3).merge();
+  sheet.getRange(startRow, 1).setValue('Epic-Child Allocation Mismatch Details');
+  sheet.getRange(startRow, 1).setFontSize(14).setFontWeight('bold').setBackground('#E1D5E7').setFontColor('black');
+  sheet.getRange(startRow, 1).setFontFamily('Comfortaa');
+  sheet.getRange(startRow, 1).setVerticalAlignment('middle');
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+  startRow++; // No space between title and table
+
+  // Summary info
+  const uniqueEpics = new Set(allMismatches.map(m => m.epicKey)).size;
+  sheet.getRange(startRow, 1).setValue(`Found ${allMismatches.length} mismatched child tickets across ${uniqueEpics} epics`);
+  sheet.getRange(startRow, 1).setFontStyle('italic').setFontSize(8).setFontFamily('Comfortaa');
+  setRowHeightWithLimit(sheet, startRow, 20, 70);
+  startRow += 2;
+
+  // Table headers
+  const headers = [
+    'Epic Key', 'Epic Summary', 'Epic Allocation',
+    'Child Key', 'Child Type', 'Child Allocation', 'Story Points'
+  ];
+
+  sheet.getRange(startRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(startRow, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white')
+    .setFontSize(8)
+    .setWrap(true)
+    .setFontFamily('Comfortaa')
+    .setVerticalAlignment('middle');
+
+  // Set header row height (max 70)
+  setRowHeightWithLimit(sheet, startRow, 30, 70);
+
+  // Set all column widths to 100
+  for (let col = 1; col <= headers.length; col++) {
+    sheet.setColumnWidth(col, 100);
+  }
+
+  startRow++;
+
+  // Sort mismatches by epic key, then child key
+  allMismatches.sort((a, b) => {
+    if (a.epicKey !== b.epicKey) return a.epicKey.localeCompare(b.epicKey);
+    return a.childKey.localeCompare(b.childKey);
+  });
+
+  // Write data rows
+  let currentEpic = null;
+  allMismatches.forEach((mismatch, index) => {
+    const isNewEpic = mismatch.epicKey !== currentEpic;
+    currentEpic = mismatch.epicKey;
+
+    // Add visual separator for new epics
+    if (isNewEpic && index > 0) {
+      sheet.getRange(startRow, 1, 1, headers.length).setBorder(true, false, false, false, false, false, 'black', SpreadsheetApp.BorderStyle.SOLID);
+    }
+
+    // Epic Key (with hyperlink)
+    if (mismatch.epicUrl) {
+      const richText = SpreadsheetApp.newRichTextValue()
+        .setText(mismatch.epicKey)
+        .setLinkUrl(mismatch.epicUrl)
+        .build();
+      sheet.getRange(startRow, 1).setRichTextValue(richText);
+    } else {
+      sheet.getRange(startRow, 1).setValue(mismatch.epicKey);
+    }
+
+    // Epic Summary (only show for first row of each epic)
+    if (isNewEpic) {
+      sheet.getRange(startRow, 2).setValue(mismatch.epicSummary);
+      sheet.getRange(startRow, 2).setWrap(true);
+      sheet.getRange(startRow, 3).setValue(mismatch.epicAllocation);
+    }
+
+    // Child Key (with hyperlink)
+    if (mismatch.childUrl) {
+      const richText = SpreadsheetApp.newRichTextValue()
+        .setText(mismatch.childKey)
+        .setLinkUrl(mismatch.childUrl)
+        .build();
+      sheet.getRange(startRow, 4).setRichTextValue(richText);
+    } else {
+      sheet.getRange(startRow, 4).setValue(mismatch.childKey);
+    }
+
+    // Child details
+    sheet.getRange(startRow, 5).setValue(mismatch.childType);
+    sheet.getRange(startRow, 6).setValue(mismatch.childAllocation);
+    sheet.getRange(startRow, 7).setValue(mismatch.childStoryPoints);
+
+    // Highlight the allocation mismatch cells
+    sheet.getRange(startRow, 3).setBackground('#ffeeee'); // Epic allocation
+    sheet.getRange(startRow, 6).setBackground('#ffcccc'); // Child allocation (darker)
+
+    // Style the row - changed font size to 8
+    sheet.getRange(startRow, 1, 1, headers.length).setFontSize(8).setWrap(true).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+
+    // Set standard row height
+    setRowHeightWithLimit(sheet, startRow, 25, 70);
+
+    startRow++;
+  });
+
+  // Add totals row
+  startRow++;
+  sheet.getRange(startRow, 1, 1, 6).merge();
+  sheet.getRange(startRow, 1).setValue('Total Story Points in Mismatched Items:');
+  sheet.getRange(startRow, 1).setHorizontalAlignment('right').setFontWeight('bold').setFontSize(8).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+
+  const totalPoints = allMismatches.reduce((sum, m) => sum + m.childStoryPoints, 0);
+  sheet.getRange(startRow, 7).setValue(totalPoints);
+  sheet.getRange(startRow, 7).setFontWeight('bold').setFontSize(8).setFontFamily('Comfortaa').setVerticalAlignment('middle');
+
+  // Set row height for totals row
+  setRowHeightWithLimit(sheet, startRow, 25, 70);
+
+  startRow += 3;
+
+  return startRow;
 }
